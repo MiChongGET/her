@@ -1,0 +1,20 @@
+{
+  "name": "her-pi-ai-compat-experiment",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Isolated compatibility experiment; not used by Her production",
+  "scripts": {
+    "typecheck": "../../node_modules/.bin/tsc --noEmit -p tsconfig.json",
+    "test": "cd ../.. && node_modules/.bin/vitest run --config experiments/pi-ai-compat/vitest.config.ts --reporter=verbose --reporter=json --outputFile=experiments/pi-ai-compat/results/test-results.json",
+    "test:electron": "node packaging/run.mjs",
+    "verify": "npm run typecheck && npm test && npm run test:electron && node verify-production.mjs"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.2.0"
+  },
+  "devDependencies": {
+    "@electron/asar": "4.0.1",
+    "@electron/packager": "20.3.0"
+  }
+}

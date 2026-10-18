@@ -1,0 +1,229 @@
+{
+  "mode": "pi",
+  "observedAt": "2026-10-15T07:03:30.023Z",
+  "versions": {
+    "node": "24.21.0",
+    "acorn": "8.18.0",
+    "ada": "4.0.0",
+    "amaro": "1.1.11",
+    "ares": "1.34.8",
+    "brotli": "1.2.0",
+    "cldr": "48.0",
+    "icu": "78.2",
+    "llhttp": "9.4.3",
+    "merve": "1.2.2",
+    "modules": "149",
+    "napi": "10",
+    "nbytes": "0.1.4",
+    "ncrypto": "0.0.1",
+    "nghttp2": "1.70.0",
+    "nghttp3": "",
+    "ngtcp2": "",
+    "openssl": "0.0.0",
+    "simdjson": "4.6.7",
+    "simdutf": "7.7.0",
+    "sqlite": "3.53.4",
+    "tz": "2026d",
+    "undici": "7.29.1",
+    "unicode": "17.0",
+    "uv": "1.52.1",
+    "uvwasi": "0.0.23",
+    "v8": "15.2.124.28-electron.0",
+    "zlib": "1.3.2.1-motley",
+    "zstd": "1.6.0",
+    "electron": "44.7.0",
+    "chrome": "152.0.7977.130"
+  },
+  "processType": "browser",
+  "isPackaged": false,
+  "appPath": "/Users/michong/work/her/experiments/pi-ai-compat/packaging/work/2026-10-15T07-03-25-915Z/with-pi",
+  "resourcesPath": "/Users/michong/work/her/node_modules/electron/dist/Electron.app/Contents/Resources",
+  "userData": "/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-pi-package-eEGyE4/userdata-built-pi",
+  "renderer": {
+    "url": "her://app/index.html",
+    "title": "Her"
+  },
+  "protocols": [
+    {
+      "protocol": "openai",
+      "scenario": "text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 1,
+      "elapsedMs": 37.24812499999996
+    },
+    {
+      "protocol": "openai",
+      "scenario": "tool-roundtrip",
+      "first": [
+        {
+          "type": "tool",
+          "id": "call_1",
+          "name": "report_connection",
+          "arguments": {
+            "ok": true
+          }
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "second": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 2
+    },
+    {
+      "protocol": "openai",
+      "scenario": "cancel-after-text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        }
+      ],
+      "failure": {
+        "code": "cancelled",
+        "message": "请求已取消。"
+      },
+      "requestCount": 1
+    },
+    {
+      "protocol": "anthropic",
+      "scenario": "text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 1,
+      "elapsedMs": 4.273874999999975
+    },
+    {
+      "protocol": "anthropic",
+      "scenario": "tool-roundtrip",
+      "first": [
+        {
+          "type": "tool",
+          "id": "call_1",
+          "name": "report_connection",
+          "arguments": {
+            "ok": true
+          }
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "second": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 2
+    },
+    {
+      "protocol": "anthropic",
+      "scenario": "cancel-after-text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        }
+      ],
+      "failure": {
+        "code": "cancelled",
+        "message": "请求已取消。"
+      },
+      "requestCount": 1
+    },
+    {
+      "protocol": "openai-responses",
+      "scenario": "text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 1,
+      "elapsedMs": 2.2885420000000067
+    },
+    {
+      "protocol": "openai-responses",
+      "scenario": "tool-roundtrip",
+      "first": [
+        {
+          "type": "tool",
+          "id": "call_1|fc_call_1",
+          "name": "report_connection",
+          "arguments": {
+            "ok": true
+          }
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "second": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        },
+        {
+          "type": "done"
+        }
+      ],
+      "requestCount": 2
+    },
+    {
+      "protocol": "openai-responses",
+      "scenario": "cancel-after-text",
+      "events": [
+        {
+          "type": "text",
+          "text": "你好🌙"
+        }
+      ],
+      "failure": {
+        "code": "cancelled",
+        "message": "请求已取消。"
+      },
+      "requestCount": 1
+    }
+  ],
+  "adapterImportMs": 148.480542,
+  "resolvedPiModule": "file:///Users/michong/work/her/experiments/pi-ai-compat/node_modules/@earendil-works/pi-ai/dist/index.js",
+  "resolvedOpenAiModule": "file:///Users/michong/work/her/experiments/pi-ai-compat/node_modules/openai/index.mjs",
+  "resolvedAnthropicModule": "file:///Users/michong/work/her/experiments/pi-ai-compat/node_modules/@anthropic-ai/sdk/index.mjs",
+  "success": true,
+  "processExitCode": 0,
+  "processSignal": null,
+  "launchToExitMs": 1197.5073750000001,
+  "stdout": "",
+  "stderr": ""
+}

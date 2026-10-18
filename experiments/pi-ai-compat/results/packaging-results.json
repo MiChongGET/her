@@ -1,0 +1,60 @@
+{
+  "observedAt": "2026-10-15T07:03:25.917Z",
+  "root": "/Users/michong/work/her",
+  "workRoot": "/Users/michong/work/her/experiments/pi-ai-compat/packaging/work/2026-10-15T07-03-25-915Z",
+  "isolatedRoot": "/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-pi-package-eEGyE4",
+  "changesLimitedTo": "experiment files and temporary directories",
+  "signed": false,
+  "published": false,
+  "buildConfig": "current Her electron.vite.config.ts copied unchanged",
+  "runs": [
+    {
+      "label": "baseline",
+      "result": "/Users/michong/work/her/experiments/pi-ai-compat/results/electron-baseline.json",
+      "success": true
+    },
+    {
+      "label": "built-pi",
+      "result": "/Users/michong/work/her/experiments/pi-ai-compat/results/electron-built-pi.json",
+      "success": true
+    },
+    {
+      "label": "packaged-pi",
+      "result": "/Users/michong/work/her/experiments/pi-ai-compat/results/electron-packaged-pi.json",
+      "success": true
+    }
+  ],
+  "baseline": {
+    "path": "/Users/michong/work/her/experiments/pi-ai-compat/packaging/work/2026-10-15T07-03-25-915Z/baseline",
+    "buildMs": 1174.782834,
+    "outBytes": 1200169,
+    "mainBytes": 66596
+  },
+  "sourceSha256": {
+    "adapter.ts": "ea006a9f87e0b209fab7159e0af83e5619f9e0a0f64887abbeb5b058794873a4",
+    "fixtures.ts": "ebec2a271f49a8d58a747ae1f3cc871c137d0116fc8e4a0304221e22f23f8761",
+    "packaging/probe.ts": "c2b06178d48d37f0de8c26351b070ae3baccea1dc9500c58c8919ad08434c1d4"
+  },
+  "withPi": {
+    "path": "/Users/michong/work/her/experiments/pi-ai-compat/packaging/work/2026-10-15T07-03-25-915Z/with-pi",
+    "buildMs": 1065.1578749999999,
+    "outBytes": 1219376,
+    "mainBytes": 85803
+  },
+  "outputDeltaBytes": 19207,
+  "runtimePackages": 86,
+  "runtimeDependencyBytes": 70701891,
+  "electronZipDir": "/Users/michong/Library/Caches/electron/953a0a4266b4fe4d83c379b33897281a9229323d55abb2772fdb535e9f65039e",
+  "packaged": {
+    "appPath": "/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-pi-package-eEGyE4/bundles/Her Pi Validation-darwin-arm64/Her Pi Validation.app",
+    "asarPath": "/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-pi-package-eEGyE4/bundles/Her Pi Validation-darwin-arm64/Her Pi Validation.app/Contents/Resources/app.asar",
+    "appBytes": 376269989,
+    "asarBytes": 75096764,
+    "entries": 13383,
+    "piEntryIncluded": true,
+    "openAiIncluded": true,
+    "anthropicIncluded": true,
+    "asarIntegrityDigest": false
+  },
+  "success": true
+}

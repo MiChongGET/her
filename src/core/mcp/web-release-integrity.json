@@ -1,0 +1,22 @@
+{
+  "@playwright/mcp": {
+    "version": "0.0.83",
+    "cli": "cli.js",
+    "sha256": "f965dbc36a4e275c85e3179735fabab74e390bdd318883990033ab5f523cbc82"
+  },
+  "playwright": {
+    "version": "1.64.0-alpha-1790635538000",
+    "cli": "cli.js",
+    "sha256": "c5a34f834090acb176c9c10264d828cd405b54f239f673ef9fd10959dfeed05b"
+  },
+  "playwright-core": {
+    "version": "1.64.0-alpha-1790635538000",
+    "cli": "cli.js",
+    "sha256": "898b9c630a1068da834914528a8ca2d60414b4952ad92162b7175359ea00076b"
+  },
+  "open-websearch": {
+    "version": "2.2.0",
+    "cli": "build/index.js",
+    "sha256": "e4f65c6b7244abe3257142a7b473ba0d6e50d65f56520397826cc6d56d049b03"
+  }
+}

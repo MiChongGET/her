@@ -1,0 +1,10 @@
+{
+  "change": "agent-memory-tools",
+  "currentPhase": "autoplan-review",
+  "completedPhases": [
+    "proposing"
+  ],
+  "lastUpdate": "2026-10-15T12:10:51.296604+00:00",
+  "reviewRun": "/Users/michong/.gstack/projects/her/agent-memory-tools-autoplan-20261015T121051Z",
+  "awaitingConfirmation": false
+}

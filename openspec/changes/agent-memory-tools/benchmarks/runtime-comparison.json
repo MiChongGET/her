@@ -1,0 +1,180 @@
+{
+  "nodeLabel": "system-node",
+  "electronLabel": "electron-run-as-node",
+  "scoreOnlyRowDifferences": 306,
+  "tokenOrResultIdDifferences": [
+    {
+      "method": "intl-fts5",
+      "input": "keywordQuery",
+      "queryId": "Q52",
+      "node": {
+        "terms": [
+          "foo_bar.md",
+          "文件"
+        ],
+        "ids": [
+          60,
+          76,
+          37
+        ]
+      },
+      "electron": {
+        "terms": [
+          "foo_bar",
+          "md",
+          "文件"
+        ],
+        "ids": [
+          60,
+          76,
+          37,
+          64
+        ]
+      }
+    },
+    {
+      "method": "intl-fts5",
+      "input": "keywordQuery",
+      "queryId": "N09",
+      "node": {
+        "terms": [
+          "foo",
+          "bar.md",
+          "文件"
+        ],
+        "ids": [
+          60,
+          76,
+          37,
+          64
+        ]
+      },
+      "electron": {
+        "terms": [
+          "foo",
+          "bar",
+          "md",
+          "文件"
+        ],
+        "ids": [
+          60,
+          76,
+          64,
+          37
+        ]
+      }
+    },
+    {
+      "method": "intl-fts5",
+      "input": "naturalQuery",
+      "queryId": "Q52",
+      "node": {
+        "terms": [
+          "foo_bar.md",
+          "这个",
+          "文件",
+          "我",
+          "原本是",
+          "用",
+          "来",
+          "写",
+          "什么",
+          "的"
+        ],
+        "ids": [
+          60,
+          59,
+          30,
+          74,
+          44,
+          76,
+          24,
+          37,
+          64,
+          31
+        ]
+      },
+      "electron": {
+        "terms": [
+          "foo_bar",
+          "md",
+          "这个",
+          "文件",
+          "我",
+          "原本是",
+          "用",
+          "来",
+          "写",
+          "什么",
+          "的"
+        ],
+        "ids": [
+          60,
+          76,
+          59,
+          64,
+          30,
+          74,
+          44,
+          24,
+          37,
+          31
+        ]
+      }
+    },
+    {
+      "method": "intl-fts5",
+      "input": "naturalQuery",
+      "queryId": "N09",
+      "node": {
+        "terms": [
+          "foo",
+          "bar.md",
+          "这个",
+          "文件",
+          "的",
+          "用途",
+          "是",
+          "什么"
+        ],
+        "ids": [
+          60,
+          64,
+          37,
+          77,
+          76,
+          29,
+          75,
+          6,
+          31,
+          73
+        ]
+      },
+      "electron": {
+        "terms": [
+          "foo",
+          "bar",
+          "md",
+          "这个",
+          "文件",
+          "的",
+          "用途",
+          "是",
+          "什么"
+        ],
+        "ids": [
+          60,
+          64,
+          76,
+          37,
+          77,
+          29,
+          75,
+          6,
+          31,
+          73
+        ]
+      }
+    }
+  ]
+}

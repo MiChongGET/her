@@ -1,0 +1,25 @@
+{
+  "tiny.docx": [
+    "DOCX_MARKER_731",
+    "Apples",
+    "7"
+  ],
+  "tiny.pptx": [
+    "PPTX_MARKER_732",
+    "NOTES_MARKER_733"
+  ],
+  "tiny.xlsx": [
+    "Revenue",
+    "Costs",
+    "XLSX_MARKER_734",
+    "XLSX_MARKER_735"
+  ],
+  "text.pdf": [
+    "PDF_TEXT_MARKER_738"
+  ],
+  "scanned.pdf": [],
+  "mixed.pdf": [
+    "PDF_TEXT_MARKER_738",
+    "HEADER_ONLY_MARKER_739"
+  ]
+}

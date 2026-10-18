@@ -1,0 +1,145 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { _electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { startMockHttp } from '../helpers/mock-mcp'
+
+test('preset defaults and actual environment values stay visible through edits, clearing and reloads', async ({}, testInfo) => {
+  const directory = mkdtempSync(join(tmpdir(), 'her-mcp-env-'))
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+    const page = await app.firstWindow()
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await page.evaluate(async command => {
+      await window.her.saveMcpService({ name: '文档读取 · MarkItDown', presetId: 'markitdown', transport: 'stdio', command, args: [], enabled: false, secretValues: { MARKITDOWN_ENABLE_PLUGINS: 'true', API_KEY: 'visible-env-fixture' } })
+    }, process.execPath)
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: 'MCP 工具', exact: true }).click()
+    const credentials = page.getByRole('region', { name: 'MCP 凭据' })
+    const defaults = credentials.getByRole('table', { name: '预设默认环境变量' })
+    await defaults.scrollIntoViewIfNeeded()
+    await expect(defaults.getByRole('cell', { name: 'false', exact: true })).toBeVisible()
+    const pluginFlag = credentials.getByLabel('MARKITDOWN_ENABLE_PLUGINS', { exact: true })
+    await expect(pluginFlag).toHaveValue('true')
+    await expect(pluginFlag).toHaveAttribute('type', 'text')
+    await expect(credentials.getByLabel('API_KEY', { exact: true })).toHaveAttribute('type', 'text')
+    await expect(credentials.getByLabel('API_KEY', { exact: true })).toHaveValue('visible-env-fixture')
+    await pluginFlag.fill('false')
+    await credentials.getByLabel('凭据名称', { exact: true }).fill('VISIBLE_FLAG')
+    await credentials.getByRole('button', { name: '添加凭据', exact: true }).click()
+    await credentials.getByLabel('VISIBLE_FLAG', { exact: true }).fill('readable value')
+    await expect(credentials.getByLabel('VISIBLE_FLAG', { exact: true })).toHaveAttribute('type', 'text')
+    await credentials.getByLabel('清除 API_KEY', { exact: true }).check()
+    await page.getByRole('button', { name: '保存 MCP 服务', exact: true }).click()
+    await expect(page.getByText('配置版本 2', { exact: true })).toBeVisible()
+    expect(await page.evaluate(async () => {
+      const service = (await window.her.listMcpServices())[0]
+      return window.her.getMcpEnvironment(service.id, service.revision)
+    })).toEqual({ MARKITDOWN_ENABLE_PLUGINS: 'false', VISIBLE_FLAG: 'readable value' })
+    await page.reload()
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: 'MCP 工具', exact: true }).click()
+    await expect(pluginFlag).toHaveValue('false')
+    await expect(credentials.getByLabel('VISIBLE_FLAG', { exact: true })).toHaveValue('readable value')
+    await expect(credentials.getByLabel('API_KEY', { exact: true })).toHaveCount(0)
+    await pluginFlag.scrollIntoViewIfNeeded()
+    await page.screenshot({ path: testInfo.outputPath('saved-environment-visible.png'), animations: 'disabled' })
+    await page.getByRole('button', { name: '添加 MCP 服务', exact: true }).click()
+    const presetDefaults = page.locator('.mcp-presets').getByRole('table', { name: '预设默认环境变量' })
+    await expect(presetDefaults.getByRole('rowheader', { name: 'PEEKABOO_ALLOW_TOOLS' })).toBeVisible()
+    await page.locator('.mcp-presets').getByRole('combobox').selectOption('playwright')
+    await expect(page.getByText('此预设无需额外环境变量。', { exact: true })).toBeVisible()
+    await page.locator('.mcp-presets').getByRole('combobox').selectOption('markitdown')
+    await expect(presetDefaults.getByRole('rowheader', { name: 'MARKITDOWN_ENABLE_PLUGINS' })).toBeVisible()
+    await page.locator('.mcp-presets').getByRole('combobox').selectOption('open-websearch')
+    await expect(presetDefaults.locator('tbody tr')).toHaveCount(7)
+    for (const [width, height] of [[850, 620], [1140, 800], [1440, 900]]) {
+      await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height })
+      await presetDefaults.scrollIntoViewIfNeeded()
+      expect(await page.getByRole('dialog', { name: '设置', exact: true }).evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      expect(await presetDefaults.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      await expect(page.getByRole('button', { name: '保存 MCP 服务', exact: true })).toBeInViewport()
+      await page.screenshot({ path: testInfo.outputPath(`mcp-environment-${width}.png`), animations: 'disabled' })
+    }
+    await presetDefaults.screenshot({ path: testInfo.outputPath('preset-environment-table.png') })
+  } finally {
+    await app?.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})
+
+test('MCP settings keep actions visible across window sizes and preserve working configuration flows', async ({}, testInfo) => {
+  const directory = mkdtempSync(join(tmpdir(), 'her-mcp-layout-'))
+  const mcp = await startMockHttp()
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
+  let app: ElectronApplication | undefined
+  try {
+    app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+    const page = await app.firstWindow()
+    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await page.evaluate(async ({ url, command }) => {
+      await window.her.saveMcpService({ name: 'Mac 操作 · Peekaboo', transport: 'stdio', command, args: ['--fixture-only'], cwd: '/tmp', enabled: false, secretValues: { API_KEY: 'local-layout-fixture' } })
+      await window.her.saveMcpService({ name: '本地 HTTP 工具', transport: 'streamable-http', url, enabled: true })
+    }, { url: mcp.url, command: process.execPath })
+    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: 'MCP 工具', exact: true }).click()
+    const services = page.getByRole('complementary', { name: 'MCP 服务列表' })
+    await services.getByRole('button', { name: /Mac 操作 · Peekaboo/ }).click()
+    const save = page.getByRole('button', { name: '保存 MCP 服务', exact: true })
+    const testConnection = page.getByRole('button', { name: '测试 MCP 连接', exact: true })
+    const editor = page.locator('.mcp-editor-scroll')
+    const presetToggle = page.locator('.mcp-presets > summary')
+    await expect(page.locator('.mcp-presets')).not.toHaveAttribute('open', '')
+    await page.getByLabel('MCP 名称', { exact: true }).fill('配置草稿保持不变')
+    await presetToggle.click()
+    await expect(page.getByRole('button', { name: '检查预设依赖', exact: true })).toBeVisible()
+    await expect(page.getByLabel('MCP 名称', { exact: true })).toHaveValue('配置草稿保持不变')
+    await presetToggle.click()
+    await page.getByLabel('MCP 名称', { exact: true }).fill('Mac 操作 · Peekaboo')
+
+    for (const [width, height] of [[850, 620], [1140, 800], [1440, 900]]) {
+      await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height })
+      await page.getByLabel('凭据名称', { exact: true }).scrollIntoViewIfNeeded()
+      await expect(save).toBeInViewport()
+      await expect(testConnection).toBeInViewport()
+      await editor.evaluate(element => element.scrollTo(0, 0))
+      await expect(page.getByLabel('MCP 名称', { exact: true })).toBeInViewport()
+      expect(await page.getByRole('dialog', { name: '设置', exact: true }).evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      await page.screenshot({ path: testInfo.outputPath(`mcp-settings-${width}.png`), animations: 'disabled' })
+    }
+
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(850, 620))
+    await editor.evaluate(element => element.scrollTo(0, 0))
+    await presetToggle.click()
+    await page.locator('.mcp-install-guide > summary').click()
+    await page.locator('.mcp-install-guide p').scrollIntoViewIfNeeded()
+    await expect(save).toBeInViewport()
+    expect(await page.getByRole('dialog', { name: '设置', exact: true }).evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+    await page.screenshot({ path: testInfo.outputPath('mcp-preset-expanded.png'), animations: 'disabled' })
+    await presetToggle.click()
+    await page.getByRole('button', { name: '删除 MCP 服务', exact: true }).click()
+    await expect(page.getByRole('button', { name: '确认删除 MCP 服务', exact: true })).toBeInViewport()
+    await expect(page.getByRole('button', { name: '确认删除 MCP 服务', exact: true })).toBeFocused()
+    await page.getByRole('button', { name: '取消', exact: true }).click()
+
+    await services.getByRole('button', { name: /本地 HTTP 工具/ }).click()
+    await page.getByLabel('MCP 名称', { exact: true }).fill('HTTP 配置已保存')
+    await save.click()
+    await expect(services.getByRole('button', { name: /HTTP 配置已保存/ })).toBeVisible()
+    await testConnection.click()
+    await expect(page.getByText('已连接', { exact: true })).toBeVisible()
+    await expect(page.getByText('连接成功，发现 2 个工具。', { exact: true })).toBeVisible()
+    await page.locator('.mcp-tools > summary').click()
+    await expect(page.getByRole('list', { name: '可用 MCP 工具' }).getByRole('listitem')).toHaveCount(2)
+    expect(mcp.requests.filter(request => request.method === 'tools/call')).toHaveLength(0)
+    await page.getByRole('button', { name: '停用 MCP 服务', exact: true }).click()
+    await expect(page.getByRole('button', { name: '启用已保存服务', exact: true })).toBeVisible()
+    expect(await page.evaluate(async () => (await window.her.listMcpServices()).find(service => service.name === 'HTTP 配置已保存')?.enabled)).toBe(false)
+  } finally {
+    await app?.close()
+    await mcp.close()
+    rmSync(directory, { recursive: true, force: true })
+  }
+})

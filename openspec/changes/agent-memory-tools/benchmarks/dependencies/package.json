@@ -1,0 +1,8 @@
+{
+  "name": "her-memory-retrieval-benchmark",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "nodejieba": "3.5.8"
+  }
+}

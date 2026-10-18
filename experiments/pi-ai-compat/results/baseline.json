@@ -1,0 +1,12 @@
+{
+  "command": "npm run check",
+  "cwd": "/Users/michong/work/her",
+  "date": "2026-10-15",
+  "exitCode": 0,
+  "typecheck": "passed",
+  "tests": { "filesPassed": 7, "testsPassed": 194 },
+  "build": "passed",
+  "mainBundleBytesApprox": 65970,
+  "warnings": ["Node SQLite experimental warning"],
+  "scope": "Unmodified Her baseline, before experimental adapter integration. No live provider endpoints."
+}

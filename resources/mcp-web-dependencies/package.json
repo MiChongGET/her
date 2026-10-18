@@ -1,0 +1,9 @@
+{
+  "name": "her-web-tools-runtime",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@playwright/mcp": "0.0.83",
+    "open-websearch": "2.2.0"
+  }
+}

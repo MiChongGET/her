@@ -1,0 +1,5 @@
+# Synthetic document fixtures
+
+Generated for Her compatibility testing; no private/user data. `expectations.json` lists semantic text markers (Markdown may escape underscores), rather than full binary snapshots. `tiny.docx` contains Chinese text and Apples/7 table; `tiny.pptx` includes slide and notes; `tiny.xlsx` has Revenue/Costs sheets and an unevaluated formula. `text.pdf` has two text pages, `scanned.pdf` is image-only, and `mixed.pdf` has image content plus text/header. `corrupt.pdf` exercises published MarkItDown's plain-text fallback; `encrypted.pdf` must fail conversion. `long.txt` has 66,000 characters; `slow.pdf` is reserved for cancellation diagnostics. No OCR or Excel recalculation is expected.
+
+T11 adds `chart.pdf`, generated reproducibly by `python3 tests/fixtures/documents/create_pdf_chart.py` using only constants and the Python standard library. Its physical page 1 has the text `CHART_MARKER_741`, a red bar, a taller blue bar and a baseline. Text presence does not establish chart understanding. Existing mixed/scanned/encrypted fixtures are reused unchanged from the accepted T10 synthetic fixture set.
