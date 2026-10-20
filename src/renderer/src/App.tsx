@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import type { BootstrapState, ChatMessage, ConversationSummary, FileReference, FileGrant, ProviderProfile, SendMessageInput, TaskEvent } from '../../shared/types'
+import type { BootstrapState, ChatMessage, ConversationQueueState, ConversationSummary, FileReference, FileGrant, ProviderProfile, SendMessageInput, TaskEvent } from '../../shared/types'
 import TaskStatus, { ArtifactPreview } from './TaskStatus'
 import FileAccessPanel from './FileAccessPanel'
 import DocumentSources, { FilePreview } from './DocumentSources'
@@ -40,6 +40,7 @@ export default function App() {
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, ChatMessage[]>>({})
   const [tasks, setTasks] = useState<Record<string, TaskEvent | null>>({})
   const [queues, setQueues] = useState<Record<string, ConversationQueueState>>({})
+  const [queueTick, setQueueTick] = useState(0)
   const taskVersions = useRef(new Map<string, number>())
   const requestVersion = useRef(0)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -173,6 +174,7 @@ export default function App() {
   useEffect(() => {
     let subscribed = true
     const unsubscribeRequest = window.her.onRequestEvent(event => {
+      setQueueTick(tick => tick + 1)
       requestVersion.current++
       taskVersions.current.set(event.conversationId, (taskVersions.current.get(event.conversationId) ?? 0) + 1)
       if (event.state === 'started') {
@@ -211,13 +213,7 @@ export default function App() {
         if (subscribed && task && !completedRequests.current.has(task.requestId) && ['running', 'awaiting_confirmation'].includes(task.run.status) && version === (taskVersions.current.get(conversation.id) ?? 0)) receiveTask(task)
       }))
     }).catch(() => {})
-    const unsubscribeTask = window.her.onTaskEvent(task => {
-      if (!completedRequests.current.has(task.requestId)) receiveTask(task)
-    })
-    const unsubscribeQueue = window.her.onQueueEvent(queue => {
-      setQueues(prev => ({ ...prev, [queue.conversationId]: queue }))
-    })
-    return () => { subscribed = false; unsubscribeRequest(); unsubscribe(); unsubscribeTask(); unsubscribeQueue() }
+    return () => { subscribed = false; unsubscribeRequest(); unsubscribe() }
   }, [loadBootstrap, receiveTask])
 
   useEffect(() => {
@@ -244,6 +240,12 @@ export default function App() {
   useEffect(() => { setSelectedModel(null) }, [activeProfileId])
 
   const messages = currentId ? messagesByConversation[currentId] ?? [] : []
+  useEffect(() => {
+    if (!currentId) return
+    let live = true
+    void window.her.getQueue(currentId).then(state => { if (live) setQueues(previous => ({ ...previous, [currentId]: state })) }).catch(() => {})
+    return () => { live = false }
+  }, [currentId, queueTick])
   useEffect(() => {
     if (followStream.current) bottomRef.current?.scrollIntoView?.({ behavior: 'auto' })
   }, [messages, currentId, busy])
@@ -474,7 +476,7 @@ export default function App() {
           <div id={`conversation-group-${group.label}`} hidden={collapsedGroups[group.label]}>
           {group.items.map((item) => <div key={item.id} className="conversation-row">
           <button className={`conversation-item ${item.id === currentId ? 'selected' : ''}`} aria-label={item.title} aria-current={item.id === currentId ? 'page' : undefined} onClick={() => { changeConversation(item.id); setError(''); setDraft(''); followStream.current = true }}>
-            <Icon name="chat" /><span><span className="conversation-heading"><strong>{item.title}</strong>{tasks[item.id] && <span className={`task-indicator ${tasks[item.id]!.state}`} title={tasks[item.id]!.state === 'running' ? '执行中' : tasks[item.id]!.state === 'approval' ? '等待确认' : tasks[item.id]!.state === 'paused' ? '已暂停' : '执行中'}>{tasks[item.id]!.state === 'running' ? '●' : tasks[item.id]!.state === 'approval' ? '!' : tasks[item.id]!.state === 'paused' ? '▌▌' : '●'}</span>}<time className="conversation-updated" dateTime={item.updatedAt} title={new Date(item.updatedAt).toLocaleString('zh-CN')}>{group.label === '更早' ? new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></span><small>{conversationPreview(item.lastMessage)}</small></span>
+            <Icon name="chat" /><span><span className="conversation-heading"><strong>{item.title}</strong>{tasks[item.id] && ['running', 'awaiting_confirmation', 'paused'].includes(tasks[item.id]!.run.status) && <span className={`task-indicator ${tasks[item.id]!.run.status}`} title={tasks[item.id]!.run.status === 'awaiting_confirmation' ? '等待确认' : tasks[item.id]!.run.status === 'paused' ? '已暂停' : '执行中'} aria-label={tasks[item.id]!.run.status === 'awaiting_confirmation' ? '等待确认' : tasks[item.id]!.run.status === 'paused' ? '已暂停' : '执行中'}>{tasks[item.id]!.run.status === 'awaiting_confirmation' ? '!' : tasks[item.id]!.run.status === 'paused' ? '‖' : '●'}</span>}<time className="conversation-updated" dateTime={item.updatedAt} title={new Date(item.updatedAt).toLocaleString('zh-CN')}>{group.label === '更早' ? new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></span><small>{conversationPreview(item.lastMessage)}</small></span>
           </button>
           <button className="conversation-delete" aria-label={`删除对话 ${item.title}`} onClick={() => void trashConversation(item.id)}><Icon name="trash" /></button>
           </div>)}

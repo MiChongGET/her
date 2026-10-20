@@ -66,6 +66,9 @@ beforeEach(() => {
     onRequestEvent: vi.fn().mockImplementation(callback => { emitRequest = callback; return () => {} }),
     listMcpServices: vi.fn().mockResolvedValue([]), getMcpEnvironment: vi.fn().mockResolvedValue({}), saveMcpService: vi.fn(), deleteMcpService: vi.fn(), testMcpService: vi.fn(),
     setMcpServiceEnabled: vi.fn(), listMcpTools: vi.fn().mockResolvedValue([]), getMcpStatus: vi.fn(),
+    getQueue: vi.fn().mockImplementation(async (conversationId: string) => ({ conversationId, items: [], paused: null, running: false, compacting: false })),
+    cancelQueuedMessage: vi.fn().mockResolvedValue(undefined), resumeQueue: vi.fn().mockResolvedValue(undefined), compactConversation: vi.fn().mockResolvedValue(undefined),
+    stopCompaction: vi.fn().mockResolvedValue(undefined), switchModel: vi.fn().mockResolvedValue(undefined),
     getConversationTask: vi.fn().mockResolvedValue(null), decideToolApproval: vi.fn().mockResolvedValue(undefined), revokeConversationApprovals: vi.fn().mockResolvedValue(undefined),
     resolveUnknownToolCall: vi.fn(),
     continueTask: vi.fn(), onTaskEvent: vi.fn().mockReturnValue(() => {}), getArtifactPreview: vi.fn(),
@@ -1781,4 +1784,60 @@ it('send-owned creation cannot reclaim the view after the user opens another con
   expect(bridge.sendMessage).not.toHaveBeenCalled()
   expect((input as HTMLTextAreaElement).value).toBe('新视图草稿')
   expect(screen.getByRole('heading', { name: '用户新对话' })).toBeTruthy()
+})
+
+describe('queue and task indicators', () => {
+  const queueState = (patch: Partial<import('../src/shared/types').ConversationQueueState>) => ({
+    conversationId: conversation.id, items: [], paused: null, running: false, compacting: false, ...patch })
+
+  it('lists messages waiting behind the running reply, oldest first, with their preview', async () => {
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
+    vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ running: true, items: [
+      { requestId: 'q1', userMessageId: 'u1', preview: '第一条排队的话', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' },
+      { requestId: 'q2', userMessageId: 'u2', preview: '第二条排队的话', profileId: null, model: null, createdAt: '2026-10-20T08:01:00.000Z' }] }))
+    render(<App />)
+    const region = await screen.findByRole('status', { name: '排队中的消息' })
+    const previews = [...region.querySelectorAll('.queued-preview')].map(node => node.textContent)
+    expect(previews).toEqual(['第一条排队的话', '第二条排队的话'])
+  })
+
+  it('says why the queue is waiting for the user instead of running on', async () => {
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
+    vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ paused: 'compaction-failed', items: [
+      { requestId: 'q1', userMessageId: 'u1', preview: '等着', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' }] }))
+    render(<App />)
+    expect(await screen.findByText('压缩失败')).toBeTruthy()
+  })
+
+  it('shows that a compaction is in progress', async () => {
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
+    vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ compacting: true, items: [
+      { requestId: 'q1', userMessageId: 'u1', preview: '等着', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' }] }))
+    render(<App />)
+    expect(await screen.findByText('正在压缩上下文…')).toBeTruthy()
+  })
+
+  it('shows nothing extra when nothing is queued', async () => {
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
+    render(<App />)
+    await waitFor(() => expect(bridge.getQueue).toHaveBeenCalledWith(conversation.id))
+    await screen.findByLabelText('聊天消息')
+    expect(screen.queryByRole('status', { name: '排队中的消息' })).toBeNull()
+  })
+
+  it('marks a conversation whose task is waiting for approval in the sidebar', async () => {
+    vi.mocked(bridge.getConversationTask).mockResolvedValue(taskEvent())
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
+    render(<App />)
+    const indicator = await screen.findByLabelText('等待确认')
+    expect(indicator.className).toContain('awaiting_confirmation')
+  })
+
+  it('does not mark a finished task in the sidebar', async () => {
+    vi.mocked(bridge.getConversationTask).mockResolvedValue(taskEvent('stopped'))
+    vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
+    render(<App />)
+    await screen.findByText('已停止', { exact: false })
+    expect(document.querySelector('.task-indicator')).toBeNull()
+  })
 })

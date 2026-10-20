@@ -78,9 +78,15 @@
 
 ## 9. IPC、类型与界面
 
-- [x] 9.1 `src/shared/types.ts`、`src/preload/index.ts(.d.ts)`、`src/main/ipc.ts` 增加入队/撤销/停止/继续/压缩/切模型/按会话状态等通道，事件带 conversationId/runId/seq，不暴露 Pi 对象；`tests/ipc-policy.test.ts` 通过（**部分实现**：入队、停止、继续、任务状态已实现；撤销 IPC、压缩 IPC、切模型 IPC 未实现；部分 ipc-policy 测试失败）
-- [x] 9.2 `App.tsx` / `TaskStatus.tsx`：多会话并行状态、排队消息与撤销、等待审批、等待资源、压缩中/失败/重试、中断片段标记；`tests/renderer.test.tsx` 覆盖 chat-message-layout 新场景（**部分实现**：排队消息显示、等待审批、等待资源、压缩状态已实现；撤销 UI、并行状态显示、中断片段标记未实现；renderer 测试未更新）
-- [x] 9.3 `SettingsPanel.tsx`：目录模型/自定义服务、认证方式、上下文容量；`TrashPanel.tsx`：清理未完成与重试；渲染测试通过（**部分实现**：设置面板已显示认证方式、上下文容量；TrashPanel 的清理未完成与重试功能未实现；部分渲染测试失败）
+- [ ] 9.1 `src/shared/types.ts`、`src/preload/index.ts(.d.ts)`、`src/main/ipc.ts` 增加入队/撤销/停止/继续/压缩/切模型/按会话状态等通道，事件带 conversationId/runId/seq，不暴露 Pi 对象；`tests/ipc-policy.test.ts` 通过
+  - 已做：`her:queue-get/cancel/resume`、`her:compact`、`her:compact-stop`、`her:model-switch` 共 6 个通道及类型、preload、输入校验，并有"拒绝其他发送者与子框架"的测试
+  - 未做：事件没有单调 `seq`；`tests/ipc-policy.test.ts` 仍有 10 个失败（都在文件选择/预览相关，不在这 6 个通道上）
+- [ ] 9.2 `App.tsx` / `TaskStatus.tsx`：多会话并行状态、排队消息与撤销、等待审批、等待资源、压缩中/失败/重试、中断片段标记；`tests/renderer.test.tsx` 覆盖 chat-message-layout 新场景
+  - 已做（只读显示，经 `getQueue` 取得，6 条渲染测试）：排队消息列表、队列暂停原因、"正在压缩"提示、侧栏对话的运行/等待确认/暂停指示
+  - 未做：撤销排队消息、手动压缩/停止压缩、切换模型、继续队列的界面控件；中断片段标记（依赖 2.4）；"等待资源"没有独立状态
+- [ ] 9.3 `SettingsPanel.tsx`：目录模型/自定义服务、认证方式、上下文容量；`TrashPanel.tsx`：清理未完成与重试；渲染测试通过
+  - 已做：上下文容量输入框、认证方式只读显示
+  - 未做：认证方式显式选择（现在由是否填了 Key/请求头推断）；Pi 目录模型选择（依赖阶段 3）；`TrashPanel` 的清理失败保留与重试
 - [ ] 9.4 更新 `AGENTS.md` 中的技术栈、项目结构、IPC 与数据目录说明，使之与新实现一致
 
 ## 10. 删除旧路径与完整验收

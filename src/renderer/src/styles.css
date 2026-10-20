@@ -64,7 +64,7 @@ button svg { flex: 0 0 auto; }
 .conversation-item strong { flex: 1; min-width: 0; font-size: 14px; font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .task-indicator { flex: 0 0 auto; font-size: 10px; line-height: 1; }
 .task-indicator.running { color: #4fd1c5; }
-.task-indicator.approval { color: #f97316; }
+.task-indicator.awaiting_confirmation { color: #f97316; }
 .task-indicator.paused { color: #94a3b8; }
 .conversation-updated { flex: 0 0 auto; min-width: 32px; margin-left: auto; color: #5f6b56; font-size: 11px; white-space: nowrap; text-align: right; }
 .conversation-item small { display: block; color: #5f6b56; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 7px; max-width: 100%; line-height: 1.4; }
