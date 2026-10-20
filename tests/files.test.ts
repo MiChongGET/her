@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, mkdir, writeFile, rename, symlink, unlink } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
@@ -16,8 +17,8 @@ async function setup() {
   cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const store = new HerStore(join(root, 'db.sqlite'))
   cleanups.push(() => store.close())
-  const conversationId = store.createConversation().id
-  const other = store.createConversation().id
+  const conversationId = randomUUID(), other = randomUUID()
+  store.createConversation(conversationId, randomUUID(), 't'); store.createConversation(other, randomUUID(), 't')
   const lifetime = new AbortController()
   const access = new FileAccessService(store, lifetime.signal)
   const registry = new SimpleToolRegistry(); registerFileTools(registry, access)
@@ -164,98 +165,12 @@ describe('bounded read-only tools', () => {
 
 import { ChatService } from '../src/core/conversation/chat'
 import { ProfileService } from '../src/core/storage/profiles'
-import { streamChat } from '../src/core/providers/stream'
 import type { ChatEvent, StreamChatInput } from '../src/shared/types'
 
-it('revalidates all image/text sources after asynchronous preparation before HTTP', async () => {
-  const f = await setup(); await writeFile(join(f.directory, 'a'), 'private')
-  const [grant] = await f.access.grant([f.directory], { scope: 'persistent', kind: 'directory' })
-  const ref = await f.access.reference(grant.id, 'a', f.context)
-  const artifacts = new ToolArtifactStore(f.store, f.lifetime.signal, f.access)
-  const first = await artifacts.put(Buffer.from('first'), { conversationId: f.context.conversationId, sourceFileId: ref.id }, 'image/png')
-  const second = await artifacts.put(Buffer.from('second'), { conversationId: f.context.conversationId }, 'image/png')
-  let dispatched = false
-  vi.stubGlobal('fetch', async () => { dispatched = true; throw new Error('must not send revoked bytes') })
-  const input: StreamChatInput = {
-    provider: { id: 'p', name: 'p', protocol: 'openai', baseUrl: 'http://localhost/v1', model: 'm', apiKey: '', customHeaders: {} },
-    system: '', signal: f.context.signal,
-    messages: [{ role: 'assistant', content: null, tool_calls: [{ id: 'c', type: 'function', function: { name: 'images', arguments: '{}' } }] },
-      { role: 'tool', tool_call_id: 'c', content: { content: [{ type: 'image', artifactId: first.id, mimeType: 'image/png' }, { type: 'image', artifactId: second.id, mimeType: 'image/png' }] } }],
-    loadImage: async id => { const bytes = await artifacts.read(id, f.context); if (id === second.id) await f.access.revoke(grant.id); return bytes },
-    beforeDispatch: () => { artifacts.authorize(first.id, f.context); artifacts.authorize(second.id, f.context) }
-  }
-  await expect(async () => { for await (const _ of streamChat(input)) { /* consume */ } }).rejects.toThrow()
-  expect(dispatched).toBe(false)
-  vi.unstubAllGlobals()
-})
 
-it('persists selected references, filters revoked historical text and preserves tool pairing without replay', async () => {
-  const f = await setup(); await writeFile(join(f.directory, 'a.txt'), 'private-file-secret')
-  const [grant] = await f.access.grant([f.directory], { scope: 'persistent', kind: 'directory' })
-  const ref = await f.access.reference(grant.id, 'a.txt', f.context)
-  const profiles = new ProfileService(f.store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost/v1', model: 'm' })
-  const result = await f.registry.execute('read_text', { fileId: ref.id }, f.context)
-  f.store.addMessages([
-    { id: 'old-user', conversationId: f.context.conversationId, role: 'user', status: 'complete', createdAt: 'now', content: 'read' },
-    { id: 'old-assistant', conversationId: f.context.conversationId, role: 'assistant', status: 'complete', createdAt: 'now', content: 'private-file-secret', fileSources: { fileIds: [ref.id] }, toolCalls: [{ id: 'read', name: 'read_text', arguments: { fileId: ref.id }, result }] }
-  ])
-  await f.access.revoke(grant.id)
-  let input: StreamChatInput | undefined
-  let finish!: () => void
-  const done = new Promise<void>(resolve => { finish = resolve })
-  const chat = new ChatService(f.store, profiles, event => { if (event.done) finish() }, () => '', async function* (value) {
-    input = value; yield { type: 'text', text: 'ok' }; yield { type: 'done' }
-  }, f.registry, new ToolArtifactStore(f.store, undefined, f.access), undefined, undefined, f.access)
-  await expect(chat.send({ requestId: 'invalid', conversationId: f.other, profileId: profile.id, content: 'read', fileIds: [ref.id] })).rejects.toThrow()
-  await chat.send({ requestId: 'next', conversationId: f.context.conversationId, profileId: profile.id, content: 'next' })
-  await done
-  expect(JSON.stringify(input!.messages)).not.toContain('private-file-secret')
-  expect(input!.messages.some(message => message.role === 'tool' && message.tool_call_id === 'read')).toBe(true)
-  expect(f.store.getMessages(f.context.conversationId)[1].content).toBe('private-file-secret')
-  const [newGrant] = await f.access.grant([join(f.directory, 'a.txt')], { scope: 'conversation', kind: 'file', conversationId: f.context.conversationId })
-  const newRef = await f.access.reference(newGrant.id, '', f.context)
-  const next = await chat.send({ requestId: 'selected', conversationId: f.context.conversationId, profileId: profile.id, content: 'read', fileIds: [newRef.id] })
-  expect(next.userMessage.files).toEqual([newRef])
-  expect(f.store.getMessages(f.context.conversationId).find(m => m.id === 'selected:user')!.files).toEqual([newRef])
-  while (!f.store.getMessages(f.context.conversationId).some(m => m.id === 'selected:assistant' && m.status === 'complete')) await new Promise(resolve => setTimeout(resolve, 1))
-})
 
-import { formatModelMessages } from '../src/core/providers/message-format'
 
-it('keeps source provenance private at the OpenAI tool-call boundary', async () => {
-  const wire = await formatModelMessages('openai', [{ role: 'assistant', content: 'ok', fileSources: { fileIds: ['private-source'] }, tool_calls: [{ id: 'c', type: 'function', function: { name: 'read_text', arguments: '{}' } }] }], async () => new Uint8Array())
-  expect(wire).toEqual([{ role: 'assistant', content: 'ok', tool_calls: [{ id: 'c', type: 'function', function: { name: 'read_text', arguments: '{}' } }] }])
-})
 
-it.each(['openai', 'anthropic', 'openai-responses'] as const)('ChatService blocks %s HTTP when a prior prepared image is revoked during a later image read', async protocol => {
-  const f = await setup(); await writeFile(join(f.directory, 'a'), 'private')
-  const [grant] = await f.access.grant([f.directory], { scope: 'persistent', kind: 'directory' })
-  const ref = await f.access.reference(grant.id, 'a', f.context)
-  const artifacts = new ToolArtifactStore(f.store, f.lifetime.signal, f.access)
-  const first = await artifacts.put(Buffer.from('private-image'), { conversationId: f.context.conversationId, sourceFileId: ref.id }, 'image/png')
-  const second = await artifacts.put(Buffer.from('second'), { conversationId: f.context.conversationId }, 'image/png')
-  f.store.addMessages([
-    { id: 'user', conversationId: f.context.conversationId, role: 'user', content: 'look', createdAt: 'now', status: 'complete' },
-    { id: 'assistant', conversationId: f.context.conversationId, role: 'assistant', content: '', createdAt: 'now', status: 'complete', toolCalls: [{ id: 'c', name: 'images', arguments: {}, result: { content: [{ type: 'image', artifactId: first.id, mimeType: 'image/png' }, { type: 'image', artifactId: second.id, mimeType: 'image/png' }] } }] }
-  ])
-  const read = artifacts.read.bind(artifacts)
-  vi.spyOn(artifacts, 'read').mockImplementation(async (id, context) => {
-    const bytes = await read(id, context)
-    if (id === second.id) await f.access.revoke(grant.id)
-    return bytes
-  })
-  let requests = 0; vi.stubGlobal('fetch', async () => { requests++; throw new Error('unexpected HTTP') })
-  const profiles = new ProfileService(f.store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol, baseUrl: 'http://localhost/v1', model: 'm' })
-  let finish!: (event: ChatEvent) => void
-  const done = new Promise<ChatEvent>(resolve => { finish = resolve })
-  const chat = new ChatService(f.store, profiles, event => { if (event.done) finish(event) }, () => '', streamChat, f.registry, artifacts, undefined, undefined, f.access)
-  await chat.send({ requestId: 'r', conversationId: f.context.conversationId, profileId: profile.id, content: 'continue' })
-  expect((await done).message.status).toBe('failed')
-  expect(requests).toBe(0)
-  vi.unstubAllGlobals()
-})
 
 it('rejects missing sources, nonregular files, oversized files and late search cancellation', async () => {
   const f = await setup(); const path = join(f.directory, 'a'); await writeFile(path, 'needle')
@@ -277,21 +192,6 @@ it('rejects missing sources, nonregular files, oversized files and late search c
   await expect(f.registry.execute('search_text', { grantId: grant.id, query: 'needle' }, { ...f.context, signal: cancel.signal })).rejects.toThrow()
 })
 
-it('a missing grant root does not prevent an ordinary chat, and is omitted from the model catalog', async () => {
-  const f = await setup(); const path = join(f.directory, 'missing.txt'); await writeFile(path, 'old')
-  await f.access.grant([path], { scope: 'conversation', kind: 'file', conversationId: f.context.conversationId })
-  await unlink(path)
-  const profiles = new ProfileService(f.store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost/v1', model: 'm' })
-  let system = ''; let finish!: (event: ChatEvent) => void
-  const done = new Promise<ChatEvent>(resolve => { finish = resolve })
-  const chat = new ChatService(f.store, profiles, event => { if (event.done) finish(event) }, () => '', async function* (input) {
-    system = input.system; yield { type: 'text', text: 'hello' }; yield { type: 'done' }
-  }, f.registry, undefined, undefined, undefined, f.access)
-  await chat.send({ requestId: 'missing-root', conversationId: f.context.conversationId, profileId: profile.id, content: 'hello' })
-  expect((await done).message.status).toBe('complete')
-  expect(system).not.toContain('missing.txt')
-})
 
 it('publishing an artifact from a stopped parser context creates no usable cache', async () => {
   const f = await setup(); await writeFile(join(f.directory, 'a'), 'a')
@@ -306,35 +206,6 @@ it('publishing an artifact from a stopped parser context creates no usable cache
   inspected.close()
 })
 
-it('revocation also removes a later tool echo of source-derived arguments, retaining the audit', async () => {
-  const f = await setup(); await writeFile(join(f.directory, 'a'), 'derived-secret')
-  const [grant] = await f.access.grant([f.directory], { scope: 'persistent', kind: 'directory' })
-  const ref = await f.access.reference(grant.id, 'a', f.context)
-  f.registry.register({ name: 'echo', description: 'echo', parameters: { type: 'object' } }, async args => {
-    await f.access.revoke(grant.id)
-    return { content: [{ type: 'text', text: String(args.text) }] }
-  }, { assess: async () => ({ effect: 'read', target: 'echo', summary: 'echo' }) })
-  const profiles = new ProfileService(f.store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost/v1', model: 'm' })
-  let round = 0; let last = ''; let finish!: () => void
-  const done = new Promise<void>(resolve => { finish = resolve })
-  const chat = new ChatService(f.store, profiles, event => { if (event.done) finish() }, () => '', async function* (input) {
-    round++
-    if (round === 1) yield { type: 'tool', id: 'read', name: 'read_text', arguments: { fileId: ref.id } }
-    else if (round === 2) yield { type: 'tool', id: 'echo', name: 'echo', arguments: { text: 'derived-secret' } }
-    else { last = JSON.stringify(input.messages); yield { type: 'text', text: 'revoked' } }
-    yield { type: 'done' }
-  }, f.registry, undefined, undefined, undefined, f.access)
-  await chat.send({ requestId: 'derived', conversationId: f.context.conversationId, profileId: profile.id, content: 'read then echo' })
-  await done
-  expect(last).not.toContain('derived-secret')
-  expect(last).toContain('tool_call_id')
-  expect(f.store.getMessages(f.context.conversationId).at(-1)!.toolCalls?.[1].arguments).toEqual({ text: 'derived-secret' })
-  const nextDone = new Promise<void>(resolve => { finish = resolve })
-  await chat.send({ requestId: 'next-derived', conversationId: f.context.conversationId, profileId: profile.id, content: 'next' })
-  await nextDone
-  expect(last).not.toContain('derived-secret')
-})
 
 it('preserves document MIME metadata for the downstream parser instead of labelling DOCX as text', async () => {
   const f = await setup(); const path = join(f.directory, 'report.docx'); await writeFile(path, 'placeholder package')

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { app, protocol, BrowserWindow, nativeImage } from 'electron'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -86,7 +87,8 @@ try {
   if(!corruptError.includes('无法读取')) throw new Error('Corrupt PDF accepted')
   const store=new HerStore(join(evidence,'integration.sqlite'))
   const files=new FileAccessService(store); const artifacts=new ToolArtifactStore(store,undefined,files)
-  const context={conversationId:store.createConversation().id,runId:'pdf-real',callId:'pdf-real',signal,modelSupportsVision:true}
+  const conversationId=randomUUID(); store.createConversation(conversationId,randomUUID(),'t')
+  const context={conversationId,runId:'pdf-real',callId:'pdf-real',signal,modelSupportsVision:true}
   const [grant]=await files.grant([join(root,'tests/fixtures/documents/mixed.pdf')],{scope:'conversation',kind:'file',conversationId:context.conversationId})
   const file=await files.reference(grant.id,'',context)
   const service=new PdfService(files,artifacts,driver); const registry=new SimpleToolRegistry(); registerPdfTools(registry,service)

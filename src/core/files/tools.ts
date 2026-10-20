@@ -1,4 +1,3 @@
-// @ts-nocheck - TODO 10.5: Fix store method calls after core agent integration
 import { FileAccessError, fileEntryError } from './errors'
 import { createHash } from 'node:crypto'
 import { opendir } from 'node:fs/promises'

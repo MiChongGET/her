@@ -8,7 +8,7 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type {
   ProviderProtocol, ServiceModel, TestKind, ConnectionTestResult, ConversationSummary, TrashedConversation,
-  McpServiceConfig, FileGrant, FileReference, ChatMessage, DesktopSettings, ArtifactReference, DocumentReference
+  McpServiceConfig, FileGrant, FileReference, ChatMessage, DesktopSettings, ArtifactReference, DocumentReference, UnknownToolCall
 } from '../../shared/types'
 import { DocumentCache, DOCUMENT_CLEANUP_ERROR } from '../documents/cache'
 
@@ -109,6 +109,8 @@ export interface StoredTask {
   error: string | null
   /** The earlier attempt this one continues. */
   continuationOf: string | null
+  /** The reply this task was producing, so a stopped task can be shown against its message. */
+  assistantMessageId: string | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -223,7 +225,7 @@ export class HerStore {
 
   constructor(path: string) {
     this.documentDirectory = path === ':memory:' ? '' : join(dirname(path), 'documents')
-    this.artifactDirectory = path === ':memory:' ? '' : join(dirname(path), 'tool-artifacts')
+    this.artifactDirectory = path === ':memory:' ? '' : join(dirname(path), 'artifacts')
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 })
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL;')
@@ -311,7 +313,8 @@ export class HerStore {
         started_at TEXT,
         ended_at TEXT,
         error TEXT,
-        continuation_of TEXT
+        continuation_of TEXT,
+        assistant_message_id TEXT
       );
 
       CREATE INDEX idx_tasks_conversation ON tasks(conversation_id, created_at DESC);
@@ -338,6 +341,9 @@ export class HerStore {
         dispatch_phase TEXT NOT NULL,
         result TEXT,
         error TEXT,
+        -- A person's decision about an unknown outcome. The call itself stays 'unknown': this is a separate record.
+        resolution TEXT,
+        resolved_at TEXT,
         created_at TEXT NOT NULL,
         dispatched_at TEXT,
         completed_at TEXT,
@@ -472,43 +478,23 @@ export class HerStore {
 
   getService(id: string): StoredService | null {
     const row = this.db.prepare('SELECT * FROM services WHERE id = ?').get(id) as any
-    if (!row) return null
+    return row ? this.serviceFromRow(row) : null
+  }
+
+  /** Rows written before a test kind existed lack it; fill it in on read so callers never see undefined. */
+  private serviceFromRow(row: any): StoredService {
+    const fill = (tests: Partial<Record<TestKind, ConnectionTestResult>> | undefined) => ({ ...untestedConnections(), ...tests })
+    const models = (JSON.parse(row.models) as ServiceModel[]).map(model => ({ ...model, tests: fill(model.tests) }))
     return {
-      id: row.id,
-      name: row.name,
-      protocol: row.protocol,
-      baseUrl: row.base_url,
-      defaultModel: row.default_model,
-      authMethod: row.auth_method,
-      sealedSecrets: row.sealed_secrets,
-      hasApiKey: row.has_api_key === 1,
-      hasCustomHeaders: row.has_custom_headers === 1,
-      maxOutputTokens: row.max_output_tokens,
-      contextWindow: row.context_window,
-      models: JSON.parse(row.models),
-      tests: JSON.parse(row.tests),
-      revision: row.revision
+      id: row.id, name: row.name, protocol: row.protocol, baseUrl: row.base_url, defaultModel: row.default_model,
+      authMethod: row.auth_method, sealedSecrets: row.sealed_secrets, hasApiKey: row.has_api_key === 1,
+      hasCustomHeaders: row.has_custom_headers === 1, maxOutputTokens: row.max_output_tokens, contextWindow: row.context_window,
+      models, tests: fill(JSON.parse(row.tests)), revision: row.revision
     }
   }
 
   listServices(): StoredService[] {
-    const rows = this.db.prepare('SELECT * FROM services ORDER BY name').all() as any[]
-    return rows.map(row => ({
-      id: row.id,
-      name: row.name,
-      protocol: row.protocol,
-      baseUrl: row.base_url,
-      defaultModel: row.default_model,
-      authMethod: row.auth_method,
-      sealedSecrets: row.sealed_secrets,
-      hasApiKey: row.has_api_key === 1,
-      hasCustomHeaders: row.has_custom_headers === 1,
-      maxOutputTokens: row.max_output_tokens,
-      contextWindow: row.context_window,
-      models: JSON.parse(row.models),
-      tests: JSON.parse(row.tests),
-      revision: row.revision
-    }))
+    return (this.db.prepare('SELECT * FROM services ORDER BY name').all() as any[]).map(row => this.serviceFromRow(row))
   }
 
   deleteService(id: string): void {
@@ -593,8 +579,8 @@ export class HerStore {
 
   listConversations(includeDeleted: boolean = false): StoredConversation[] {
     const sql = includeDeleted
-      ? 'SELECT * FROM conversations ORDER BY updated_at DESC'
-      : 'SELECT * FROM conversations WHERE deleted_at IS NULL ORDER BY updated_at DESC'
+      ? 'SELECT * FROM conversations ORDER BY updated_at DESC, rowid DESC'
+      : 'SELECT * FROM conversations WHERE deleted_at IS NULL ORDER BY updated_at DESC, rowid DESC'
     const rows = this.db.prepare(sql).all() as any[]
     return rows.map(row => ({
       id: row.id,
@@ -606,6 +592,16 @@ export class HerStore {
       piSessionId: row.pi_session_id,
       lastEntryId: row.last_entry_id
     }))
+  }
+
+  /** A user rename: trimmed, 1–80 characters, becomes a custom title, leaves the sort order alone, never touches a trashed conversation. */
+  renameConversation(id: string, title: string): ConversationSummary {
+    const clean = title.trim()
+    if (!clean) throw new Error('请输入对话标题。')
+    if (Array.from(clean).length > 80) throw new Error('对话标题最多 80 个字符。')
+    const result = this.db.prepare('UPDATE conversations SET title = ?, title_custom = 1 WHERE id = ? AND deleted_at IS NULL').run(clean, id)
+    if (!result.changes) throw new Error('该对话已经不存在。')
+    return this.conversationSummary(this.getConversation(id)!)
   }
 
   updateConversationTitle(id: string, title: string, custom: boolean): void {
@@ -717,13 +713,35 @@ export class HerStore {
     return (this.db.prepare(`SELECT DISTINCT conversation_id FROM input_requests WHERE status = 'pending'`).all() as { conversation_id: string }[]).map(row => row.conversation_id)
   }
 
-  /** Start-up: tasks and inputs left running by a crash are interrupted; they are never resumed automatically. */
-  markInterruptedRuns(): number {
-    const now = new Date().toISOString()
+  /**
+   * Start-up: tasks a crash left in a non-final state are interrupted and never resumed automatically.
+   * Inputs are deliberately not touched here: whether a claimed input reached Pi decides its fate (see recover.ts).
+   */
+  markInterruptedTasks(): number {
     const tasks = this.db.prepare(`UPDATE tasks SET status = 'interrupted', ended_at = ?, error = ? WHERE status IN ('queued', 'running', 'waiting_approval', 'waiting_resource', 'compacting', 'retrying', 'stopping')`)
-      .run(now, '应用中断，任务未完成。')
-    this.db.prepare(`UPDATE input_requests SET status = 'cancelled', completed_at = ? WHERE status = 'running'`).run(now)
+      .run(new Date().toISOString(), '应用中断，任务未完成。')
     return Number(tasks.changes)
+  }
+
+  getTaskByRequest(requestId: string): StoredTask | null {
+    const row = this.db.prepare('SELECT id FROM tasks WHERE request_id = ? ORDER BY rowid DESC LIMIT 1').get(requestId) as { id: string } | undefined
+    return row ? this.getTask(row.id) : null
+  }
+
+  /** Requests a crash left claimed. Whether each reached Pi decides what happens to it. */
+  listRunningInputs(): StoredInputRequest[] {
+    return (this.db.prepare(`SELECT * FROM input_requests WHERE status = 'running' ORDER BY created_at ASC, rowid ASC`).all() as any[]).map(row => this.inputFromRow(row))
+  }
+
+  /** Puts a claimed request that never reached Pi back in the queue; false if it was no longer running. */
+  requeueInput(id: string): boolean {
+    return Number(this.db.prepare(`UPDATE input_requests SET status = 'pending', started_at = NULL WHERE id = ? AND status = 'running'`).run(id).changes) === 1
+  }
+
+  /** Tasks a crash left in a non-final state. */
+  listNonTerminalTasks(): StoredTask[] {
+    return (this.db.prepare(`SELECT id FROM tasks WHERE status IN ('queued', 'running', 'waiting_approval', 'waiting_resource', 'compacting', 'retrying', 'stopping')`).all() as { id: string }[])
+      .map(row => this.getTask(row.id)!)
   }
 
   private inputFromRow(row: any): StoredInputRequest {
@@ -752,11 +770,11 @@ export class HerStore {
   // Task operations
   // ──────────────────────────────────────────────────────────────────────────────
 
-  createTask(task: Omit<StoredTask, 'createdAt' | 'startedAt' | 'endedAt' | 'continuationOf'> & { continuationOf?: string | null }): void {
+  createTask(task: Omit<StoredTask, 'createdAt' | 'startedAt' | 'endedAt' | 'continuationOf' | 'assistantMessageId'> & { continuationOf?: string | null; assistantMessageId?: string | null }): void {
     const now = new Date().toISOString()
     this.db.prepare(`
-      INSERT INTO tasks (id, conversation_id, request_id, generation, status, service_id, model_id, config_revision, created_at, continuation_of)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tasks (id, conversation_id, request_id, generation, status, service_id, model_id, config_revision, created_at, continuation_of, assistant_message_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       task.id,
       task.conversationId,
@@ -767,7 +785,8 @@ export class HerStore {
       task.modelId,
       task.configRevision,
       now,
-      task.continuationOf ?? null
+      task.continuationOf ?? null,
+      task.assistantMessageId ?? null
     )
   }
 
@@ -799,7 +818,8 @@ export class HerStore {
       startedAt: row.started_at ? new Date(row.started_at) : null,
       endedAt: row.ended_at ? new Date(row.ended_at) : null,
       error: row.error,
-      continuationOf: row.continuation_of ?? null
+      continuationOf: row.continuation_of ?? null,
+      assistantMessageId: row.assistant_message_id ?? null
     }
   }
 
@@ -841,9 +861,59 @@ export class HerStore {
   }
 
   /** Calls whose outcome is unknown or still in flight; they stop a queue from running on. */
-  listOpenToolCalls(taskId: string): { callId: string; toolName: string; target: string; status: string }[] {
-    return (this.db.prepare(`SELECT call_id, tool_name, target, status FROM tool_calls WHERE task_id = ? AND status IN ('unknown', 'running') ORDER BY created_at`).all(taskId) as any[])
-      .map(row => ({ callId: row.call_id, toolName: row.tool_name, target: row.target, status: row.status }))
+  listOpenToolCalls(taskId: string): { callId: string; toolName: string; target: string; status: string; resolution: 'handled' | 'abandoned' | null }[] {
+    return (this.db.prepare(`SELECT call_id, tool_name, target, status, resolution FROM tool_calls WHERE task_id = ? AND status IN ('unknown', 'running') ORDER BY created_at, rowid`).all(taskId) as any[])
+      .map(row => ({ callId: row.call_id, toolName: row.tool_name, target: row.target, status: row.status, resolution: row.resolution ?? null }))
+  }
+
+  /** Identifies one exact state of one unknown call, so a decision made on a stale screen cannot apply to a different state. */
+  private unknownRevision(row: { task_id: string; call_id: string; created_at: string; dispatched_at: string | null }): string {
+    return createHash('sha256').update(JSON.stringify([row.task_id, row.call_id, row.created_at, row.dispatched_at])).digest('hex').slice(0, 32)
+  }
+
+  /** Unknown outcomes in this conversation that nobody has decided about yet, oldest first. */
+  listUnresolvedToolCalls(conversationId: string): UnknownToolCall[] {
+    return (this.db.prepare(`SELECT c.* FROM tool_calls c JOIN tasks t ON t.id = c.task_id
+      WHERE t.conversation_id = ? AND c.status = 'unknown' AND c.resolution IS NULL ORDER BY c.created_at, c.rowid`).all(conversationId) as any[])
+      .map(row => ({ runId: row.task_id, callId: row.call_id, revision: this.unknownRevision(row),
+        summary: `结果未知：${row.tool_name}（目标 ${row.target}）`,
+        ...(row.dispatch_phase === 'none' ? {} : { dispatchPhase: row.dispatch_phase as UnknownToolCall['dispatchPhase'] }) }))
+  }
+
+  /**
+   * Records a person's decision about one unknown call and returns its target. Fails, changing nothing, if the call is not
+   * this conversation's, is not unknown, was already decided, or the revision no longer matches. The call stays 'unknown'.
+   */
+  resolveToolCall(input: { conversationId: string; runId: string; callId: string; revision: string; decision: 'handled' | 'abandoned' }): string {
+    const row = this.db.prepare(`SELECT c.* FROM tool_calls c JOIN tasks t ON t.id = c.task_id
+      WHERE c.task_id = ? AND c.call_id = ? AND t.conversation_id = ?`).get(input.runId, input.callId, input.conversationId) as any
+    if (!row || row.status !== 'unknown' || row.resolution !== null || this.unknownRevision(row) !== input.revision) {
+      throw new Error('这个未知动作已经变化或已处理，请刷新任务后再试。')
+    }
+    const changed = this.db.prepare(`UPDATE tool_calls SET resolution = ?, resolved_at = ? WHERE task_id = ? AND call_id = ? AND status = 'unknown' AND resolution IS NULL`)
+      .run(input.decision, new Date().toISOString(), input.runId, input.callId).changes
+    if (Number(changed) !== 1) throw new Error('这个未知动作已经变化或已处理，请刷新任务后再试。')
+    return row.target as string
+  }
+
+  countToolCalls(taskId: string): number {
+    return Number((this.db.prepare('SELECT COUNT(*) AS n FROM tool_calls WHERE task_id = ?').get(taskId) as { n: number }).n)
+  }
+
+  /** Unknown outcomes on this target that no one has decided about, in any conversation. */
+  countUnresolvedUnknownOnTarget(target: string): number {
+    return Number((this.db.prepare(`SELECT COUNT(*) AS n FROM tool_calls WHERE target = ? AND status = 'unknown' AND resolution IS NULL`).get(target) as { n: number }).n)
+  }
+
+  getToolCallRecord(taskId: string, callId: string): { status: string; result: string | null; resolution: string | null } | null {
+    const row = this.db.prepare('SELECT status, result, resolution FROM tool_calls WHERE task_id = ? AND call_id = ?').get(taskId, callId) as any
+    return row ? { status: row.status, result: row.result ?? null, resolution: row.resolution ?? null } : null
+  }
+
+  /** The conversation's newest task, whatever state it ended in. */
+  getLatestTask(conversationId: string): StoredTask | null {
+    const row = this.db.prepare('SELECT id FROM tasks WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1').get(conversationId) as { id: string } | undefined
+    return row ? this.getTask(row.id) : null
   }
 
   /** The attempt that continued this task, if any; a task is continued at most once. */
@@ -1057,8 +1127,15 @@ export class HerStore {
     this.saveService(profile)
   }
 
+  /** Deleting the selected service leaves nothing selected; it never picks another one on the user's behalf. */
   deleteProfile(id: string): void {
-    this.deleteService(id)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.deleteService(id)
+      const settings = this.getSettings()
+      if (settings.activeProfileId === id) this.saveSettings({ ...settings, activeProfileId: null })
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
   // ──────────────────────────────────────────────────────────────────────────────

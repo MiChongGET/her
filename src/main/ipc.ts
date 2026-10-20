@@ -1,4 +1,3 @@
-// @ts-nocheck - TODO 10.5: Fix store method calls after core agent integration
 import { extname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { ipcMain, shell, dialog, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'

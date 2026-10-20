@@ -2,7 +2,7 @@
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from 'node:http'
 export type Protocol = 'openai' | 'anthropic' | 'openai-responses'
 export const TOOL_NAME = 'report_connection'
-export type Scenario = 'text' | 'empty-text' | 'vision-correct' | 'vision-wrong' | 'extra-tool-argument' | 'false-tool-argument' | 'tool' | 'multi-tool' | 'bad-json-tool' | 'partial-json-tool' | 'array-tool' | 'unknown-tool' | 'mixed-invalid' | 'mixed-unfinished' | 'missing-terminal' | 'missing-finish' | 'wrong-tool-finish' | 'tool-without-calls' | 'truncated' | 'truncated-tool' | 'upstream-error' | 'malformed-json' | 'invalid-content-type' | 'unknown-stop' | 'hang' | 'http-error' | 'missing-block-stop' | 'missing-start' | 'final-only-tool' | 'queued-status' | 'missing-status' | 'redirect'
+export type Scenario = 'text' | 'empty-text' | 'vision-correct' | 'vision-wrong' | 'extra-tool-argument' | 'false-tool-argument' | 'tool' | 'multi-tool' | 'bad-json-tool' | 'partial-json-tool' | 'array-tool' | 'unknown-tool' | 'mixed-invalid' | 'mixed-unfinished' | 'missing-terminal' | 'missing-finish' | 'wrong-tool-finish' | 'tool-without-calls' | 'truncated' | 'truncated-tool' | 'upstream-error' | 'malformed-json' | 'invalid-content-type' | 'unknown-stop' | 'hang' | 'http-error' | 'missing-block-stop' | 'missing-start' | 'final-only-tool' | 'queued-status' | 'missing-status' | 'redirect' | 'server-error'
 export interface CapturedRequest { url: string; headers: IncomingHttpHeaders; body: Record<string, unknown> }
 const sse = (data: unknown, event?: string) => `${event ? `event: ${event}\n` : ''}data: ${typeof data === 'string' ? data : JSON.stringify(data)}\n\n`
 const openai = (delta: unknown, reason: string | null = null, usage?: unknown) => sse({ id: 'chat_1', object: 'chat.completion.chunk', created: 1, model: 'test-model', choices: [{ index: 0, delta, finish_reason: reason }], ...(usage ? { usage } : {}) })
@@ -64,8 +64,8 @@ export async function startFixtureServer(protocol: Protocol, scenario: Scenario 
     responsesInFlight.add(response)
     response.on('close', () => responsesInFlight.delete(response))
     if (current === 'redirect' && request.url !== '/fixture-final') { response.writeHead(302, { location: '/fixture-final' }); response.end(); return }
-    response.writeHead(options.status ?? (current === 'http-error' ? 401 : 200), { 'content-type': current === 'invalid-content-type' ? 'application/json' : 'text/event-stream' })
-    if (current === 'http-error') { response.end(JSON.stringify({ error: { message: 'fixture unauthorized synthetic_secret_marker' } })); return }
+    response.writeHead(options.status ?? (current === 'http-error' ? 401 : current === 'server-error' ? 503 : 200), { 'content-type': current === 'invalid-content-type' ? 'application/json' : 'text/event-stream' })
+    if (current === 'http-error' || current === 'server-error') { response.end(JSON.stringify({ error: { message: 'fixture unauthorized synthetic_secret_marker' } })); return }
     // With measuredUsage the reported prompt size follows the request, as a real provider's usage does.
     const prompt = options.measuredUsage ? Math.ceil(Buffer.concat(chunks).length / 4) : 11
     const bytes = Buffer.from(fixtureWire(protocol, current, prompt))

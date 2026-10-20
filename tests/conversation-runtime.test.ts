@@ -10,6 +10,10 @@ import { AgentHost } from '../src/core/agent/host'
 import { ChatService } from '../src/core/conversation/chat'
 import type { ChatEvent, RequestEvent } from '../src/shared/types'
 import { startFixtureServer } from './pi-sdk/wire'
+import { retryPolicy } from '../src/core/agent/factory'
+
+// Real backoff is seconds long; nothing in this file is about timing.
+retryPolicy.baseDelayMs = 10
 
 const codec = { encrypt: async (text: string) => Buffer.from(text), decrypt: async (bytes: Buffer) => bytes.toString() }
 function fixture(secretCodec = codec) {
@@ -105,7 +109,8 @@ for (const scenario of ['http-error', 'missing-terminal', 'truncated', 'empty-te
       expect(messages[0]).toMatchObject({ role: 'user', content: 'hello' })
       expect(messages[1]).toMatchObject({ role: 'assistant', status: 'failed' })
       expect(JSON.stringify(messages)).not.toContain('synthetic_secret_marker')
-      expect(server.requests).toHaveLength(1)
+      // A stream that dropped without finishing is transient and is retried twice; every other failure is tried once.
+      expect(server.requests).toHaveLength(scenario === 'missing-terminal' ? 3 : 1)
     } finally { await f.close(); await server.close() }
   })
 }

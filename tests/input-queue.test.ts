@@ -55,7 +55,7 @@ describe('persistent input queue', () => {
     expect(store.listConversationsWithPendingInput()).toEqual([a])
   })
 
-  it('after a crash, running work is interrupted and pending input is kept, nothing is resumed', () => {
+  it('after a crash, running tasks are interrupted and inputs are left for the host to classify, nothing is resumed', () => {
     const { store, path } = open(), a = conversation(store)
     const running = store.enqueueInput(a, 'running', null), waiting = store.enqueueInput(a, 'waiting', null)
     store.claimInput(running)
@@ -63,11 +63,13 @@ describe('persistent input queue', () => {
     store.createTask({ id: taskId, conversationId: a, requestId: running, generation: 0, status: 'running', serviceId: 's', modelId: 'm', configRevision: 1, error: null })
     store.close()
     const reopened = open(path).store
-    expect(reopened.markInterruptedRuns()).toBe(1)
+    expect(reopened.markInterruptedTasks()).toBe(1)
     expect(reopened.getTask(taskId)).toMatchObject({ status: 'interrupted' })
-    expect(reopened.getInput(running)).toMatchObject({ status: 'cancelled' })
+    // Inputs are left for the host to sort out: it must look at the Pi session to know if the model saw them.
+    expect(reopened.getInput(running)).toMatchObject({ status: 'running' })
+    expect(reopened.listRunningInputs().map(item => item.id)).toEqual([running])
     expect(reopened.getInput(waiting)).toMatchObject({ status: 'pending' })
-    expect(reopened.markInterruptedRuns()).toBe(0)
+    expect(reopened.markInterruptedTasks()).toBe(0)
   })
 
   it('links a continuation attempt to the task it continues', () => {

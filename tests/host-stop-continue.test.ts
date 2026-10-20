@@ -60,7 +60,11 @@ describe('stopping a run', () => {
     expect((await f.chat.getMessages(f.id)).at(-1)).toMatchObject({ status: 'cancelled' })
     // The model was not asked again, and the run did not come back to life.
     expect(s.requests).toHaveLength(requestsAtStop)
-    expect(f.chat.getConversationTask(f.id)).toBeNull()
+    // Nothing is running any more, but the unknown outcome is still shown so the person can decide about it.
+    const shown = f.chat.getConversationTask(f.id)
+    expect(shown?.run.status).toBe('stopped')
+    expect(shown?.unknownCalls).toHaveLength(1)
+    expect(shown?.approval).toBeUndefined()
   }, 30_000)
 
   it('a stop closes the queue before anything else, so a waiting message cannot slip in', async () => {

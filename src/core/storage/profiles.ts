@@ -93,7 +93,17 @@ function validate(input: SaveProfileInput): ValidatedInput {
 export class ProfileService {
   private readonly saving = new Set<string>()
 
+  private readonly listeners = new Set<(profileId: string, reason: 'deleted' | 'connection-changed') => void>()
   constructor(private readonly store: HerStore, private readonly codec: SecretCodec, readonly lifetime?: AbortSignal) {}
+
+  /** Told when a service is deleted, or its address, protocol or credentials change. A rename or a model-list edit is not announced. */
+  onChanged(listener: (profileId: string, reason: 'deleted' | 'connection-changed') => void): () => void {
+    this.listeners.add(listener)
+    return () => { this.listeners.delete(listener) }
+  }
+  private announce(profileId: string, reason: 'deleted' | 'connection-changed'): void {
+    for (const listener of this.listeners) try { listener(profileId, reason) } catch { /* one listener must not block the rest */ }
+  }
 
   list(): ProviderProfile[] { return this.store.listProfiles().map(publicProfile) }
 
@@ -151,6 +161,7 @@ export class ProfileService {
         tests: untestedConnections()
       }
       this.store.saveProfile(profile)
+      if (previous && connectionChanged) this.announce(id, 'connection-changed')
       return publicProfile(profile)
     } finally { this.saving.delete(id) }
   }
@@ -185,6 +196,7 @@ export class ProfileService {
   delete(id: string): void {
     this.requireProfile(id)
     this.store.deleteProfile(id)
+    this.announce(id, 'deleted')
   }
 
   revision(id: string): number { return this.requireProfile(id).revision }

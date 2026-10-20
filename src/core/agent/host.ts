@@ -5,13 +5,15 @@ import { combineRegistries } from '../tools/combine'
 import type { ApprovalRequest, FileReference, FileSources, ConversationQueueState, QueuePauseReason, ChatEvent, ChatMessage, RequestEvent, SendMessageInput, SendMessageResult, TaskEvent, ApprovalDecisionInput, ResolveUnknownToolCallInput, ContinueTaskInput } from '../../shared/types'
 import type { HerStore, StoredConversation } from '../storage/store'
 import type { ProfileService } from '../storage/profiles'
-import { createHerAgentSession, openConversationHistory } from './factory'
+import { createHerAgentSession, openConversationHistory, SessionDamagedError, SessionUnreadableError } from './factory'
 import { createGatedTools } from '../tools/gate'
 import { createDefaultRegistry } from '../tools/registry'
 import { ToolApprovalService } from '../tools/approval'
 import { ResourceQueue } from '../tools/resources'
 import { ActionLedger } from '../tools/ledger'
 import { RunLimits, RunLimitError } from './limits'
+import { classifyRun } from './recover'
+import { buildSystemPrompt } from './system-prompt'
 import { compactionBudget, exceedsWindow } from './budget'
 import type { FileAccessService } from '../files/access'
 import type { McpConnectionManager } from '../mcp/manager'
@@ -59,6 +61,9 @@ export class AgentHost {
   private readonly compacting = new Map<string, { controller: AbortController; session?: AgentSession }>()
   private closing = false
   private readonly unsubscribeRevoke?: () => void
+  private readonly unsubscribeProfiles?: () => void
+  private readonly recovery: Promise<void>
+  private recovered = false
   /** Bumped by trash/purge; a run started before the bump loses dispatch authority immediately. */
   private readonly generation = new Map<string, number>()
   private readonly mcp?: McpConnectionManager
@@ -72,9 +77,42 @@ export class AgentHost {
     this.ledger = new ActionLedger(store)
     this.ledger.recover()
     // After a restart nothing resumes by itself: interrupted work is only recorded, and waiting messages wait for the user.
-    this.store.markInterruptedRuns()
-    for (const conversationId of this.store.listConversationsWithPendingInput()) this.paused.set(conversationId, 'restart')
+    this.store.markInterruptedTasks()
+    const running = this.store.listRunningInputs()
+    for (const conversationId of new Set([...this.store.listConversationsWithPendingInput(), ...running.map(input => input.conversationId)])) this.paused.set(conversationId, 'restart')
+    this.recovery = this.recoverInputs(running).catch(() => { /* the store may already be closed */ }).finally(() => { this.recovered = true })
     this.unsubscribeRevoke = this.files?.onRevoked(() => this.recheckSources())
+    this.unsubscribeProfiles = profiles.onChanged((profileId, reason) => this.stopForService(profileId, reason))
+  }
+
+  /** Resolves once start-up recovery has settled every input a crash left claimed. */
+  ready(): Promise<void> { return this.recovery }
+
+  /**
+   * An input a crash left 'running' goes one of two ways. If the user's message never reached the Pi session the
+   * model never saw it, so it returns to the queue (still paused: nothing runs by itself). If it did reach Pi it may
+   * have had effects, so it is closed as interrupted and never resent; the reply is recorded as unfinished.
+   */
+  private async recoverInputs(running: ReturnType<HerStore['listRunningInputs']>): Promise<void> {
+    for (const input of running) {
+      try {
+        const conversation = this.store.getConversation(input.conversationId)
+        if (!conversation || conversation.deletedAt) { this.store.updateInputStatus(input.id, 'cancelled'); continue }
+        const { manager } = await openConversationHistory(this.dataDirectory, conversation)
+        const outcome = classifyRun(manager.getEntries(), input.id)
+        if (!outcome.reached) { this.store.requeueInput(input.id); continue }
+        this.store.updateInputStatus(input.id, 'cancelled')
+        if (!outcome.result && outcome.run) {
+          manager.appendCustomEntry('her.result', { id: outcome.run.assistantMessageId, conversationId: input.conversationId, role: 'assistant',
+            content: outcome.assistantText, status: 'failed', error: '应用中断，回复未完成。', createdAt: new Date().toISOString(),
+            profileId: outcome.run.profileId, model: outcome.run.model })
+        }
+        this.reconcile(input.conversationId, manager)
+      } catch {
+        // The session could not be read, so whether the model saw the message is unknown. Never resend it.
+        try { this.store.updateInputStatus(input.id, 'cancelled') } catch { /* closed */ }
+      }
+    }
   }
 
   private conversation(id: string): StoredConversation {
@@ -154,7 +192,14 @@ export class AgentHost {
     if (input.attachments?.length) throw new Error('粘贴或拖入的附件尚未接入，请先从文件选择器选择资料，或只发送文字。')
     if (input.fileIds !== undefined && (!Array.isArray(input.fileIds) || input.fileIds.length > 100 || !input.fileIds.every(id => typeof id === 'string' && id && id.length <= 128))) throw new Error('文件引用不正确。')
     if (input.fileIds?.length && !this.files) throw new Error('资料发送尚未启用。')
-    if (input.retryMessageId) throw new Error('请将内容作为新消息发送。')
+    if (input.retryMessageId !== undefined) {
+      // A retry is a new message with the same text. It is only offered for the very last reply, and only if that reply did not finish.
+      const last = this.store.getMessages(input.conversationId).at(-1)
+      if (typeof input.retryMessageId !== 'string' || !last || last.id !== input.retryMessageId || last.role !== 'assistant' || !['failed', 'cancelled'].includes(last.status)) {
+        throw new Error('只能重试当前对话最后一个未完成的回答。')
+      }
+      if (input.fileIds?.length) throw new Error('重试不能附带新的资料。')
+    }
   }
 
   private placeholder(conversationId: string, userMessageId: string, content: string, profileId: string, model: string | undefined): SendMessageResult {
@@ -170,6 +215,8 @@ export class AgentHost {
     this.validate(input)
     this.conversation(input.conversationId)
     this.sinkFor(input.conversationId, { onChat, onRequest, systemPrompt })
+    // Only waits while start-up recovery is still running; afterwards the conversation is claimed before any await.
+    if (!this.recovered) await this.recovery
     const { conversationId } = input
     // Idle means nothing runs, nothing waits and nothing is paused with a queue. Claim the conversation before
     // any await so stop can reach this send while credentials are read, and a second send is queued behind it.
@@ -205,11 +252,15 @@ export class AgentHost {
 
   /** Runs one stored request. A direct send reports a failure to its caller; a queued one pauses the queue. */
   private async admit(requestId: string, fromQueue: boolean, continuationOf?: string, claimed?: AbortController): Promise<SendMessageResult> {
+    if (!this.recovered) await this.recovery
     const row = this.store.getInput(requestId)
     if (!row || row.status !== 'pending') throw new Error('该消息已经不在队列中。')
     const controller = claimed ?? new AbortController()
     this.admitting.set(row.conversationId, { requestId, controller })
+    let started = false
     try {
+      // Needed to report the run; checked first so a missing sink cannot fail after the request was claimed.
+      const sink = this.sinkFor(row.conversationId)
       const profileId = row.profileId
       if (!profileId) throw new Error('消息缺少模型设置，请重新发送。')
       const revision = this.profiles.revision(profileId)
@@ -224,20 +275,22 @@ export class AgentHost {
       const fileIds: string[] = row.attachments ? JSON.parse(row.attachments) : []
       const files = fileIds.length ? await this.checkFiles(row.conversationId, fileIds, provider, controller.signal) : []
       if (!this.store.claimInput(requestId)) throw new Error('该消息已经被取消。')
-      const sink = this.sinkFor(row.conversationId)
+      started = true
       const result = this.placeholder(row.conversationId, row.userMessageId ?? randomUUID(), row.content, provider.id, provider.model)
       const run: ActiveRun = { requestId, conversationId: row.conversationId, taskId: randomUUID(), controller, result, sources: new Set(), files,
         limits: new RunLimits(error => { run.limitError = error; run.stopReason = 'limit'; this.abortRun(run) }) }
       this.store.createTask({ id: run.taskId, conversationId: row.conversationId, requestId, generation: 0, status: 'running',
-        serviceId: provider.id, modelId: provider.model, configRevision: revision, error: null, continuationOf: continuationOf ?? null })
+        serviceId: provider.id, modelId: provider.model, configRevision: revision, error: null, continuationOf: continuationOf ?? null,
+        assistantMessageId: result.assistantMessage.id })
       this.active.set(row.conversationId, run)
       run.limits.start()
       sink.onRequest({ requestId, conversationId: row.conversationId, state: 'started' })
       run.pending = this.generate(run, conversation, provider, sink)
       return structuredClone(result)
     } catch (error) {
-      // Not started: withdraw the request so it cannot be picked up again.
-      this.store.cancelPendingInput(requestId)
+      // Not started: withdraw the request so it cannot be picked up again. Once claimed it is 'running',
+      // which cancelPendingInput leaves alone, so close it explicitly or it would stay running forever.
+      if (!this.store.cancelPendingInput(requestId) && started) this.store.updateInputStatus(requestId, 'cancelled')
       if (fromQueue) {
         this.paused.set(row.conversationId, 'failed')
         this.sinks.get(row.conversationId)?.onRequest({ requestId, conversationId: row.conversationId, state: 'failed',
@@ -294,8 +347,10 @@ export class AgentHost {
   }
 
   /** The user's explicit go-ahead after a stop, failure, restart or compaction problem. */
-  resumeQueue(conversationId: string): void {
+  resumeQueue(conversationId: string, sink?: Sink): void {
     this.conversation(conversationId)
+    // After a restart no send has registered where events go, so the caller supplies it.
+    if (sink) this.sinks.set(conversationId, sink)
     this.paused.delete(conversationId)
     this.startNext(conversationId)
   }
@@ -362,6 +417,20 @@ export class AgentHost {
     }
   }
 
+  /**
+   * A deleted service, or one whose address, protocol or credentials changed, can no longer be trusted by the runs that
+   * started with it: stop exactly those, pause their queues, and say why. A rename or model-list edit never gets here.
+   */
+  private stopForService(profileId: string, reason: 'deleted' | 'connection-changed'): void {
+    for (const run of this.active.values()) {
+      if (run.result.assistantMessage.profileId !== profileId) continue
+      run.stopReason = 'service-changed'
+      run.stopMessage = reason === 'deleted' ? '模型服务已被删除，已停止。' : '模型服务的地址或凭据已变化，已停止。'
+      this.paused.set(run.conversationId, 'service-changed')
+      this.abortRun(run)
+    }
+  }
+
   /** After a revoke: stop every run whose latest request relied on something that is no longer valid. */
   private recheckSources(): void {
     if (!this.files) return
@@ -421,11 +490,17 @@ export class AgentHost {
           onChat({ requestId: run.requestId, conversationId: run.conversationId, message: { ...assistant }, done: false, task: this.taskEvent(run) })
         }
       })
-      connection = await createHerAgentSession(provider, conversation, this.dataDirectory, systemPrompt, run.controller.signal, history, tools, undefined,
+      connection = await createHerAgentSession(provider, conversation, this.dataDirectory, buildSystemPrompt(systemPrompt, tools.map(tool => tool.name), { contextWindow: compactionBudget(provider.contextWindow, provider.maxOutputTokens).contextWindow }), run.controller.signal, history, tools, undefined,
         this.guardFor(run.conversationId, keys => { run.sources = keys }))
       run.controller.signal.throwIfAborted()
       run.session = connection.session
       unsubscribe = connection.session.subscribe(event => {
+        // The failed attempt is dropped from the model's view when Pi retries, so what it had streamed must not stay on screen
+        // or the retried reply would be appended to it.
+        if (event.type === 'auto_retry_start' && !run.controller.signal.aborted) {
+          assistant.content = ''
+          onChat({ requestId: run.requestId, conversationId: run.conversationId, message: { ...assistant }, done: false })
+        }
         if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_delta' && !run.controller.signal.aborted) {
           assistant.content += event.assistantMessageEvent.delta
           onChat({ requestId: run.requestId, conversationId: run.conversationId, message: { ...assistant }, done: false })
@@ -442,10 +517,12 @@ export class AgentHost {
         throw new Error('incomplete')
       }
       assistant.status = 'complete'
-    } catch {
+    } catch (caught) {
       const aborted = run.controller.signal.aborted
       assistant.status = aborted ? 'cancelled' : 'failed'
-      error = run.limitError?.message ?? run.stopMessage ?? (aborted ? '回复已停止。' : connection?.transport.failure ?? '模型请求失败，请检查模型设置后重试。')
+      // A damaged or unreadable session has its own message; anything else from the SDK may name local paths or secrets.
+      const sessionProblem = caught instanceof SessionDamagedError || caught instanceof SessionUnreadableError ? caught.message : undefined
+      error = run.limitError?.message ?? run.stopMessage ?? sessionProblem ?? (aborted ? '回复已停止。' : connection?.transport.failure ?? '模型请求失败，请检查模型设置后重试。')
       assistant.error = error
       // Text produced before the stop is kept as an interrupted fragment, never as a finished answer.
       if (aborted && assistant.content.trim()) {
@@ -512,6 +589,7 @@ export class AgentHost {
   async stopAll(): Promise<void> {
     this.closing = true
     this.unsubscribeRevoke?.()
+    this.unsubscribeProfiles?.()
     for (const admission of this.admitting.values()) admission.controller.abort(new Error('应用正在退出。'))
     for (const compaction of this.compacting.values()) { compaction.controller.abort(new Error('应用正在退出。')); compaction.session?.abortCompaction() }
     const runs = [...this.active.values()]
@@ -527,9 +605,25 @@ export class AgentHost {
         toolCallsCount: run.limits.toolCalls, activeMs: run.limits.elapsedMs } }
   }
 
+  /** The running task, or else the newest one if it ended without finishing or left an unknown outcome nobody has decided on. */
   getConversationTask(conversationId: string): TaskEvent | null {
     const run = this.active.get(conversationId)
-    return run ? this.taskEvent(run) : null
+    if (run) return this.withUnknowns(this.taskEvent(run))
+    const task = this.store.getLatestTask(conversationId)
+    if (!task) return null
+    const unknownCalls = this.store.listUnresolvedToolCalls(conversationId)
+    if (task.status === 'completed' && !unknownCalls.length) return null
+    const status = task.status === 'failed' ? 'failed' : task.status === 'completed' ? 'completed' : 'stopped'
+    return { requestId: task.requestId, conversationId, ...(unknownCalls.length ? { unknownCalls } : {}),
+      run: { id: task.id, requestId: task.requestId, conversationId, assistantMessageId: task.assistantMessageId ?? '', status,
+        providerId: task.serviceId, model: task.modelId, toolCallsCount: this.store.countToolCalls(task.id),
+        activeMs: Math.max(0, (task.endedAt ?? task.createdAt).getTime() - (task.startedAt ?? task.createdAt).getTime()),
+        ...(task.continuationOf ? { continuationOf: task.continuationOf } : {}) } }
+  }
+
+  private withUnknowns(event: TaskEvent): TaskEvent {
+    const unknownCalls = this.store.listUnresolvedToolCalls(event.conversationId)
+    return unknownCalls.length ? { ...event, unknownCalls } : event
   }
 
   /** A decision only releases the pending call whose revision (run, call, tool version, args, target) it names. */
@@ -546,7 +640,15 @@ export class AgentHost {
    * TODO: Implement unknown tool call tracking and resolution
    */
   resolveUnknownToolCall(input: ResolveUnknownToolCallInput): TaskEvent | null {
-    throw new Error('未知工具处理尚未实现（需要工具门）')
+    if (!input || typeof input !== 'object' || !['handled', 'abandoned'].includes(input.decision)) throw new Error('处理决定不正确。')
+    this.conversation(input.conversationId)
+    // Only while nothing is running: a person must not clear a block under a task that is still acting.
+    if (this.busy(input.conversationId)) throw new Error('该对话仍在运行，请先停止任务，再处理未知动作。')
+    const target = this.store.resolveToolCall(input)
+    // The call stays 'unknown' in the ledger; only the target's block is lifted, and only once no other unresolved
+    // unknown outcome still points at it. A later interaction on it still needs fresh approval.
+    if (this.store.countUnresolvedUnknownOnTarget(target) === 0) this.ledger.resolve(target, input.decision)
+    return this.getConversationTask(input.conversationId)
   }
 
   /**
@@ -568,8 +670,10 @@ export class AgentHost {
     const provider = await this.profiles.resolve(input.profileId, input.model)
     if (this.busy(task.conversationId)) throw new Error('该对话正在处理其他任务，请等待完成或停止。')
     const open = this.store.listOpenToolCalls(task.id)
+    const note = (resolution: 'handled' | 'abandoned' | null) => resolution === 'handled' ? '；用户已处理，但历史结果仍未知，不得重放，后续操作需要新观察和新确认'
+      : resolution === 'abandoned' ? '；用户已放弃此动作，历史结果仍未知，不得重放' : ''
     const prompt = open.length
-      ? `继续完成上一次未完成的任务。\n以下动作的结果未知，不要重复执行；请先重新观察对应目标，确认状态后再决定：\n${open.map(call => `- ${call.toolName}（目标 ${call.target}）`).join('\n')}`
+      ? `继续完成上一次未完成的任务。\n以下动作的结果未知，不要重复执行；请先重新观察对应目标，确认状态后再决定：\n${open.map(call => `- ${call.toolName}（目标 ${call.target}）${note(call.resolution)}`).join('\n')}`
       : '继续完成上一次未完成的任务。'
     this.store.enqueueInput(task.conversationId, prompt, null, input.requestId, { profileId: input.profileId, model: provider.model, userMessageId: randomUUID() })
     // The user's explicit go-ahead; the new attempt runs ahead of anything still waiting.
@@ -662,7 +766,9 @@ export class AgentHost {
     })
     if (hasImage && provider.multimodal !== true) throw new Error('这个对话里已有图片，目标模型不支持图片，请选择支持图片的模型。')
     const budget = compactionBudget(provider.contextWindow, provider.maxOutputTokens)
-    const fits = (list: typeof before) => list.reduce((sum, message) => sum + estimateTokens(message), 0) <= budget.contextWindow - budget.reserveTokens
+    // The system prompt stored in the session was built for the previous model; every run rebuilds it for the one in use, so it is not history to fit.
+    const fits = (list: typeof before) => list.filter(message => (message as { role?: string }).role !== 'system')
+      .reduce((sum, message) => sum + estimateTokens(message), 0) <= budget.contextWindow - budget.reserveTokens
     if (fits(before)) return
     const previous = await this.profiles.resolve(last.profileId, last.model).catch(() => undefined)
     if (!previous) throw new Error('目标模型的上下文更小，需要先压缩，但原来的模型服务已不可用。请恢复原服务或换用上下文更大的模型。')

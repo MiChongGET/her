@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { isTrustedRenderer, externalUrl } from '../src/main/ipc-policy'
 
@@ -129,7 +130,7 @@ it('preload logs only fixed metadata on success and failure, including artifact 
   await api.getMcpEnvironment('service', 1)
   expect(electronMock.invoke).toHaveBeenCalledWith('her:mcp-environment', 'service', 1)
   electronMock.invoke.mockRejectedValue(new Error(sensitive))
-  await expect(api.saveProfile({ name: sensitive, protocol: 'openai', baseUrl: sensitive, model: sensitive, apiKey: sensitive })).rejects.toThrow(sensitive)
+  await expect(api.saveProfile({ name: sensitive, protocol: 'openai', baseUrl: sensitive, model: sensitive, authMethod: 'api-key', apiKey: sensitive })).rejects.toThrow(sensitive)
   const logs = JSON.stringify([...log.mock.calls, ...error.mock.calls])
   expect(logs).not.toContain(sensitive)
   expect(logs).toContain('her:artifact-preview'); expect(logs).toContain('elapsedMs'); expect(logs).toContain('IPC_FAILED')
@@ -156,7 +157,7 @@ it('late MCP test completion after shutdown never persists or reads closed DB', 
 
 it('only the main-owned picker can create grants and late selection is discarded on shutdown', async () => {
   const fixture = ipcFixture()
-  const conversation = fixture.store.createConversation()
+  const conversation = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return { id } })()
   const input = { conversationId: conversation.id, kind: 'file', scope: 'conversation' }
   await expect(Promise.resolve().then(() => fixture.call('her:files-select', { ...input, paths: ['/etc/passwd'] }))).rejects.toThrow()
   expect(await fixture.call('her:files-select', input)).toEqual({ grants: [], files: [] })
@@ -176,7 +177,7 @@ it('returns only conversation-owned references for native selected files, with n
   const { join } = await import('node:path'); const { tmpdir } = await import('node:os')
   const directory = await mkdtemp(join(tmpdir(), 'her-selection-')); const path = join(directory, 'note.txt')
   await writeFile(path, 'selected')
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   try {
     electronMock.select.mockResolvedValueOnce({ canceled: false, filePaths: [path] })
     const selection = await fixture.call('her:files-select', { conversationId, kind: 'file', scope: 'conversation' })
@@ -190,7 +191,7 @@ it('returns only conversation-owned references for native selected files, with n
 })
 
 it('sanitizes missing selected-file and injected native-dialog errno paths before IPC rejection', async () => {
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   const input = { conversationId, kind: 'file', scope: 'conversation' }
   const privatePath = '/private/var/her-selection-secret-does-not-exist/secret.txt'
   try {
@@ -214,7 +215,7 @@ it('sanitizes missing selected-file and injected native-dialog errno paths befor
 it('drop preload accepts only native File provenance and main rejects directories and stale sources', async () => {
   await import('../src/preload/index')
   const api = electronMock.exposed as HerApi
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
   const directory = await mkdtemp('/tmp/her-drop-'); const path = directory + '/note.txt'
   await writeFile(path, 'hello')
@@ -238,7 +239,7 @@ it('drop preload accepts only native File provenance and main rejects directorie
 })
 
 it('source opening reveals launchers and persistent listing works after every conversation is purged', async () => {
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
   const directory = await mkdtemp('/tmp/her-open-'); const path = directory + '/launch.command'
   await writeFile(path, 'echo dangerous')
@@ -256,7 +257,7 @@ it('source opening reveals launchers and persistent listing works after every co
 })
 
 it('new file actions reject untrusted frames and native directory cancellation grants nothing', async () => {
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   try {
     for (const channel of ['her:files-drop', 'her:files-open', 'her:files-preview', 'her:files-persistent']) {
       expect(() => electronMock.handlers.get(channel)!({ ...fixture.event, senderFrame: { url: 'her://app/index.html' } })).toThrow('无权')
@@ -268,7 +269,7 @@ it('new file actions reject untrusted frames and native directory cancellation g
 })
 
 it.each(['revoke', 'purge', 'version', 'shutdown'] as const)('checked image preview never publishes bytes after late %s', async mode => {
-  const fixture = ipcFixture(); const conversationId = fixture.store.createConversation().id
+  const fixture = ipcFixture(); const conversationId = (() => { const id = randomUUID(); fixture.store.createConversation(id, randomUUID(), 't'); return id })()
   const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
   const directory = await mkdtemp('/tmp/her-preview-'); const path = directory + '/image.png'
   await writeFile(path, 'image')

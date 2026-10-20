@@ -129,20 +129,3 @@ it('outer read_document owns a 120-second timeout and drops a noncooperative lat
 })
 
 import { DatabaseSync } from 'node:sqlite'
-// Her-Pi v1 is schema version 1 only (checked in HerStore's constructor); pre-Pi numeric migrations (v0-v12) do not apply.
-it.skip('migrates the accepted v9 database without changing file authority or independent action resolution', async () => {
-  const f = await setup()
-  const run = { id: 'old-run', requestId: 'old-request', conversationId: f.context.conversationId, assistantMessageId: 'a', status: 'failed' as const, providerId: 'p', model: 'm', toolCallsCount: 1, activeMs: 42 }
-  f.store.saveTaskRun(run)
-  f.store.saveToolCall({ id: 'unknown', runId: run.id, name: 'send', arguments: { text: 'original audit' }, status: 'unknown', dispatchPhase: 'action', assessment: { effect: 'send', target: 'target', summary: 'original' } })
-  const unresolved = f.store.listUnresolvedToolCalls(f.context.conversationId)[0]
-  f.store.resolveUnknownToolCall({ conversationId: f.context.conversationId, runId: run.id, callId: 'unknown', revision: unresolved.revision, decision: 'handled' })
-  const calls = f.store.listToolCalls(run.id)
-  const db = new DatabaseSync(join(f.root, 'db.sqlite')); db.exec('DROP TABLE artifact_owners; DROP TABLE document_owners; DROP TABLE documents; PRAGMA user_version=9;'); db.close()
-  const upgraded = new HerStore(join(f.root, 'db.sqlite')); cleanups.push(() => upgraded.close())
-  expect(upgraded.getTaskRun(run.id)).toEqual(run); expect(upgraded.listToolCalls(run.id)).toEqual(calls)
-  const access = new FileAccessService(upgraded)
-  expect(Buffer.from(await access.readBytes(f.file.id, f.context)).toString()).toBe('authorized bytes')
-  const service = new DocumentService(upgraded, access, () => f.parser)
-  expect((await service.extract(f.file.id, f.context)).status).toBe('ready')
-})

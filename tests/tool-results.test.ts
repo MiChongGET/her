@@ -1,9 +1,11 @@
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync, unlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { HerStore } from '../src/core/storage/store'
 
+const newConversation = (store: HerStore) => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return { id } }
 const stores: HerStore[] = []
 const directories: string[] = []
 afterEach(() => {
@@ -15,7 +17,7 @@ function setup() {
   directories.push(directory)
   const store = new HerStore(join(directory, 'her.sqlite'))
   stores.push(store)
-  const conversation = store.createConversation()
+  const conversation = newConversation(store)
   return { directory, store, conversation, context: {
     runId: 'run', conversationId: conversation.id, callId: 'call', signal: new AbortController().signal
   } }
@@ -69,14 +71,14 @@ describe('tool artifact ownership and persistence', () => {
     const artifacts = new ToolArtifactStore(store)
     const bytes = new Uint8Array([137, 80, 78, 71, 9, 8, 7])
     const reference = await artifacts.put(bytes, { conversationId: conversation.id }, 'image/png')
-    store.addMessage({ id: 'assistant', conversationId: conversation.id, role: 'assistant', content: 'observed', status: 'complete', createdAt: new Date().toISOString(), toolCalls: [{ id: 'call', name: 'observe', arguments: {}, result: { content: [{ type: 'image', artifactId: reference.id, mimeType: reference.mimeType }] } }] })
-    const history = JSON.stringify(store.getMessages(conversation.id))
-    expect(history).toContain(reference.id)
-    expect(history).not.toContain(Buffer.from(bytes).toString('base64'))
-    expect(history).not.toContain(directory)
+    // History lives in the Pi session now; what the host keeps is the reference, which must carry no bytes and no path.
+    const serialized = JSON.stringify(reference)
+    expect(serialized).toContain(reference.id)
+    expect(serialized).not.toContain(Buffer.from(bytes).toString('base64'))
+    expect(serialized).not.toContain(directory)
     expect(reference).toEqual({ id: expect.any(String), conversationId: conversation.id, mimeType: 'image/png', byteLength: bytes.byteLength })
     expect(await new ToolArtifactStore(store).read(reference.id, context)).toEqual(bytes)
-    const file = join(directory, 'tool-artifacts', reference.id)
+    const file = join(directory, 'artifacts', reference.id)
     expect(readFileSync(file)).toEqual(Buffer.from(bytes))
     unlinkSync(file)
     await expect(artifacts.read(reference.id, context)).rejects.toThrow(/缺失|不存在/)
@@ -87,7 +89,7 @@ describe('tool artifact ownership and persistence', () => {
     const { store, conversation, context } = setup()
     const artifacts = new ToolArtifactStore(store)
     const reference = await artifacts.put(new Uint8Array([1]), { conversationId: conversation.id }, 'image/png')
-    const other = store.createConversation()
+    const other = newConversation(store)
     await expect(artifacts.read(reference.id, { ...context, conversationId: other.id })).rejects.toThrow(/授权|会话/)
     await expect(artifacts.read('../her.sqlite', context)).rejects.toThrow()
   })
@@ -109,7 +111,7 @@ describe('tool artifact ownership and persistence', () => {
     const { store, conversation, context } = setup()
     const artifacts = new ToolArtifactStore(store)
     const own = await artifacts.put(new Uint8Array([1]), { conversationId: conversation.id }, 'image/png')
-    const other = store.createConversation()
+    const other = newConversation(store)
     const foreign = await artifacts.put(new Uint8Array([2]), { conversationId: other.id }, 'image/png')
     store.trashConversation(conversation.id)
     store.purgeConversation(conversation.id)

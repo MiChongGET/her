@@ -3,7 +3,6 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { testConnection } from '../src/core/providers/probe'
 import type { ProviderEvent, StreamChatInput } from '../src/shared/types'
 import { HerStore } from '../src/core/storage/store'
 import { ProfileService, type SecretCodec } from '../src/core/storage/profiles'
@@ -35,13 +34,13 @@ function setup() {
   return { store, profiles: new ProfileService(store, codec), file, codec }
 }
 
-const base = { name: '我的服务', protocol: 'openai' as const, baseUrl: 'https://models.example.com/proxy/v1/', model: 'my-model' }
+const base = { authMethod: 'none' as const, name: '我的服务', protocol: 'openai' as const, baseUrl: 'https://models.example.com/proxy/v1/', model: 'my-model' }
 
 describe('model configuration and credential boundary', () => {
   it('stores secrets encrypted and never returns them in the public profile', async () => {
     const { store, profiles, file } = setup()
     const profile = await profiles.save({
-      ...base, apiKey: 'private-api-key-for-test', customHeaders: { 'X-Token': 'private-header-for-test' }
+      ...base, authMethod: 'api-key' as const, apiKey: 'private-api-key-for-test', customHeaders: { 'X-Token': 'private-header-for-test' }
     })
     expect(profile).toMatchObject({ hasApiKey: true, hasCustomHeaders: true, baseUrl: 'https://models.example.com/proxy/v1' })
     expect(profile).not.toHaveProperty('apiKey')
@@ -57,7 +56,7 @@ describe('model configuration and credential boundary', () => {
 
   it('preserves omitted credentials, but explicitly clears empty credentials', async () => {
     const { store, profiles } = setup()
-    const created = await profiles.save({ ...base, apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' } })
+    const created = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' } })
     await profiles.save({ ...base, id: created.id, name: '改个名字' })
     expect(await profiles.resolve(created.id)).toMatchObject({
       apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' }
@@ -84,19 +83,19 @@ describe('model configuration and credential boundary', () => {
     await expect(profiles.save({ ...base, baseUrl: 'https://user:secret@example.com/v1' })).rejects.toThrow('地址')
     await expect(profiles.save({ ...base, baseUrl: 'https://example.com/v1?token=secret' })).rejects.toThrow('地址')
     await expect(profiles.save({ ...base, protocol: 'unknown' as 'openai' })).rejects.toThrow('协议')
-    await expect(profiles.save({ ...base, customHeaders: { 'X-Key': 'one\r\ntwo' } })).rejects.toThrow('请求头')
+    await expect(profiles.save({ ...base, authMethod: 'headers' as const, customHeaders: { 'X-Key': 'one\r\ntwo' } })).rejects.toThrow('请求头')
     expect(profiles.list()).toEqual([])
     store.close()
   })
 
   it('fails closed if credential protection fails and leaves the old configuration intact', async () => {
     const { store, profiles } = setup()
-    const original = await profiles.save({ ...base, apiKey: 'original-secret' })
+    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'original-secret' })
     const broken = new ProfileService(store, {
       encrypt: async () => { throw new Error('凭据保护不可用') },
       decrypt: async () => { throw new Error('凭据保护不可用') }
     })
-    await expect(broken.save({ ...base, id: original.id, apiKey: 'replacement-secret' })).rejects.toThrow()
+    await expect(broken.save({ ...base, authMethod: 'api-key' as const, id: original.id, apiKey: 'replacement-secret' })).rejects.toThrow()
     expect(await profiles.resolve(original.id)).toMatchObject({ apiKey: 'original-secret', model: 'my-model' })
     store.close()
   })
@@ -113,12 +112,12 @@ describe('model configuration and credential boundary', () => {
 
   it('can clear or fully replace old credentials even when the old ciphertext cannot be decrypted', async () => {
     const { store, profiles, codec } = setup()
-    const original = await profiles.save({ ...base, apiKey: 'old-key', customHeaders: { 'X-Test': 'old-header' } })
+    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'old-key', customHeaders: { 'X-Test': 'old-header' } })
     const unavailable = new ProfileService(store, {
       encrypt: codec.encrypt,
       decrypt: async () => { throw new Error('old credentials unavailable') }
     })
-    await expect(unavailable.save({ ...base, id: original.id, apiKey: 'new-key', customHeaders: {} }))
+    await expect(unavailable.save({ ...base, authMethod: 'api-key' as const, id: original.id, apiKey: 'new-key', customHeaders: {} }))
       .resolves.toMatchObject({ hasApiKey: true, hasCustomHeaders: false })
     expect(await profiles.resolve(original.id)).toMatchObject({ apiKey: 'new-key', customHeaders: {} })
     await expect(unavailable.save({ ...base, id: original.id, apiKey: '', customHeaders: {} }))
@@ -129,7 +128,7 @@ describe('model configuration and credential boundary', () => {
 
   it('preserves a test completed during a name-only save and keeps its connection revision valid', async () => {
     const { store, profiles, codec } = setup()
-    const original = await profiles.save({ ...base, apiKey: 'existing-key' })
+    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'existing-key' })
     const revision = profiles.revision(original.id)
     let release!: () => void
     let entered!: () => void
@@ -243,40 +242,7 @@ describe('Anthropic maximum output tokens', () => {
     store.close()
   })
 
-  it('runs connection tests with the saved value', async () => {
-    const { store, profiles } = setup()
-    const saved = await profiles.save({ ...claude, maxOutputTokens: 8192 })
-    const seen: (number | undefined)[] = []
-    const stream = async function* (input: StreamChatInput): AsyncGenerator<ProviderEvent> {
-      seen.push(input.provider.maxOutputTokens)
-      yield { type: 'text', text: '连接成功' }
-      yield { type: 'done' }
-    }
-    expect((await testConnection(profiles, saved.id, 'chat', stream)).status).toBe('passed')
-    await profiles.save({ ...claude, id: saved.id, maxOutputTokens: null })
-    await testConnection(profiles, saved.id, 'chat', stream)
-    expect(seen).toEqual([8192, undefined])
-    store.close()
-  })
 
-  it('runs connection tests for openai-responses protocol', async () => {
-    const { store, profiles } = setup()
-    const saved = await profiles.save({ ...base, protocol: 'openai-responses' as const })
-    const seen: string[] = []
-    const stream = async function* (input: StreamChatInput): AsyncGenerator<ProviderEvent> {
-      seen.push(input.provider.protocol)
-      if (input.tools) {
-        yield { type: 'tool', id: 'call_1', name: 'report_connection', arguments: { ok: true } }
-      } else {
-        yield { type: 'text', text: '连接成功' }
-      }
-      yield { type: 'done' }
-    }
-    expect((await testConnection(profiles, saved.id, 'chat', stream)).status).toBe('passed')
-    expect((await testConnection(profiles, saved.id, 'tools', stream)).status).toBe('passed')
-    expect(seen).toEqual(['openai-responses', 'openai-responses'])
-    store.close()
-  })
 })
 
 describe('multiple models per service', () => {
@@ -390,29 +356,6 @@ describe('per-model 1M output limit', () => {
   })
 })
 
-describe('per-model connection tests', () => {
-  it('tests the chosen model with its own limit and records the result only on it', async () => {
-    const { store, profiles } = setup()
-    const saved = await profiles.save({
-      ...base, protocol: 'anthropic', maxOutputTokens: 8192,
-      models: [{ id: 'my-model' }, { id: 'second-model', longOutput: true }]
-    })
-    const seen: [string, number | undefined][] = []
-    const stream = async function* (input: StreamChatInput): AsyncGenerator<ProviderEvent> {
-      seen.push([input.provider.model, input.provider.maxOutputTokens])
-      yield { type: 'text', text: '连接成功' }
-      yield { type: 'done' }
-    }
-    expect((await testConnection(profiles, saved.id, 'chat', stream, 'second-model')).status).toBe('passed')
-    expect(profiles.list()[0].models.map(item => item.tests.chat.status)).toEqual(['untested', 'passed'])
-    await testConnection(profiles, saved.id, 'chat', stream)
-    expect(seen).toEqual([['second-model', 1_000_000], ['my-model', 8192]])
-    expect(profiles.list()[0].models.map(item => item.tests.chat.status)).toEqual(['passed', 'passed'])
-    store.close()
-  })
-})
-
-
 describe('vision connection tests and legacy model tests', () => {
   it('fills missing vision status on an existing stored profile without resaving', async () => {
     const { store, profiles, file, codec } = setup()
@@ -427,38 +370,5 @@ describe('vision connection tests and legacy model tests', () => {
     reopened.close()
   })
 
-  it('sends a fixed real image to the chosen model and validates its visible color', async () => {
-    const { store, profiles } = setup()
-    const saved = await profiles.save({ ...base, models: [{ id: base.model }, { id: 'vision-model' }] })
-    let seen: StreamChatInput | undefined
-    const stream = async function* (input: StreamChatInput): AsyncGenerator<ProviderEvent> {
-      seen = input
-      yield { type: 'text', text: 'RED' }
-      yield { type: 'done' }
-    }
-    expect((await testConnection(profiles, saved.id, 'vision', stream, 'vision-model')).status).toBe('passed')
-    expect(seen?.provider.model).toBe('vision-model')
-    expect(seen?.tools).toBeUndefined()
-    const user = seen?.messages[0]
-    expect(user?.content).toEqual([expect.objectContaining({ type: 'text' }), expect.objectContaining({ type: 'image', source: expect.objectContaining({ media_type: 'image/png', data: expect.any(String) }) })])
-    const blocks = user?.content as Array<{ source?: { data: string } }>
-    expect(Buffer.from(blocks[1].source!.data, 'base64').subarray(0, 8)).toEqual(Buffer.from([137,80,78,71,13,10,26,10]))
-    expect(profiles.list()[0].models.map(model => model.tests.vision.status)).toEqual(['untested', 'passed'])
-    const failed = await testConnection(profiles, saved.id, 'vision', async function* () { yield { type: 'text', text: 'I cannot see images' }; yield { type: 'done' } })
-    expect(failed).toMatchObject({ status: 'failed', message: expect.stringMatching(/图片|视觉/) })
-    store.close()
-  })
 
-  it('does not persist a vision test that finishes after the connection revision changes', async () => {
-    const { store, profiles } = setup()
-    const saved = await profiles.save(base)
-    const result = await testConnection(profiles, saved.id, 'vision', async function* () {
-      await profiles.save({ ...base, id: saved.id, baseUrl: 'https://changed.example.test/v1' })
-      yield { type: 'text', text: 'RED' }
-      yield { type: 'done' }
-    })
-    expect(result).toMatchObject({ status: 'failed', message: expect.stringContaining('配置发生变化') })
-    expect(profiles.list()[0].models[0].tests.vision.status).toBe('untested')
-    store.close()
-  })
 })

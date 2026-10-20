@@ -49,7 +49,7 @@ describe('permanently deleting a conversation', () => {
     const keptImage = await artifacts.put(new Uint8Array([2]), { conversationId: kept }, 'image/png')
     store.trashConversation(gone)
     store.purgeConversation(gone)
-    expect(existsSync(join(directory, 'tool-artifacts', goneImage.id))).toBe(false)
+    expect(existsSync(join(directory, 'artifacts', goneImage.id))).toBe(false)
     expect(store.listArtifactOwners(gone)).toEqual([])
     expect(await artifacts.read(keptImage.id, context(kept))).toEqual(new Uint8Array([2]))
   })

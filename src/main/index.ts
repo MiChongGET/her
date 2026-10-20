@@ -6,6 +6,7 @@ import { app, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, net, pro
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { mkdirSync } from 'node:fs'
+import { dataPaths } from '../core/storage/paths'
 import { HerStore } from '../core/storage/store'
 import { ProfileService } from '../core/storage/profiles'
 import { ChatService, SYSTEM } from '../core/conversation/chat'
@@ -83,9 +84,11 @@ function trayIcon(): Electron.NativeImage {
 }
 
 async function start(): Promise<void> {
-  const dataDirectory = app.getPath('userData')
+  // Everything lives under Her-Pi-v1/, so files left by the old Her in the user-data folder are never read or touched.
+  const paths = dataPaths(app.getPath('userData'))
+  const dataDirectory = paths.root
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 })
-  store = new HerStore(join(dataDirectory, 'her.sqlite'))
+  store = new HerStore(paths.database)
   if (!store.listConversations().length) {
     // Create a default conversation on first launch
     const { randomUUID } = await import('node:crypto')

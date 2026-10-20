@@ -11,13 +11,34 @@
 ## 2. 新资料空间、会话权威与投影
 
 - [x] 2.1 数据目录改为 `appData/Her-Pi-v1`（保留 `HER_DATA_DIR` 覆盖），创建 `pi/sessions`、`pi/workspaces`、`artifacts`、`documents`；测试断言路径与旧 `userData` 不重叠且旧目录未被访问
+  - 已做：Pi 会话/工作区放在 `<userData>/Her-Pi-v1/pi/`，`HER_DATA_DIR` 可覆盖
+  - 未做：`her.sqlite`、`documents`、`tool-artifacts` 仍在旧 `userData` 根目录（与旧版 Her 同目录，与"新资料空间"相悖）；没有断言路径不重叠的测试
+  - 说明：目录在首次使用时创建（Pi 会话/工作区、artifacts、documents）；`tests/data-paths.test.ts` 5 条覆盖统一入口、不与旧 userData 重叠、旧文件不被读取或改动
+  - 遗留：`tests/e2e/` 中 file-bridge、tool-resolution、tools 三个 spec 仍调用旧 store API，未更新，也未运行
 - [x] 2.2 重写 `src/core/storage/store.ts` 为新 v1 schema（D6 表清单），删除旧迁移代码与 messages 表；`tests/storage.test.ts` 按新 schema 重写并通过
+  - 说明：`tests/storage.test.ts` 已按新 schema 整体重写为 47 条（schema 与版本检查、设置、模型服务、会话、重命名、回收站、永久删除、投影、MCP 服务），连续 15 次运行全部通过
+  - 顺带修了两处实现缺陷：`HerStore` 缺 `renameConversation`（IPC 在调用它，界面重命名会直接报错）；`listConversations` 缺 `rowid` 次级排序，同一毫秒创建的对话顺序不确定
+  - 注意：`ipc.ts` 里的 `@ts-nocheck` 已摘掉（此前正是它盖住了上面第一处缺陷）。`src/` 里仍有 5 个文件带 `@ts-nocheck`：documents/service.ts、files/access.ts、files/tools.ts、mcp/config.ts、tools/artifacts.ts，其类型错误尚未暴露
 - [x] 2.3 实现投影：在 `turn_end` / `agent_settled` / 启动时从 `SessionManager.getEntries()` 拉取并以 entry ID 幂等 upsert，与游标对账补齐；测试”清空投影后重建内容一致””已写 Pi 未投影后补齐且不重复”
-- [ ] 2.4 实现 drafts（中断片段）与 `her.run` 关联条目；测试中断片段不进入后续上下文
-- [ ] 2.5 实现启动恢复：非终态任务→interrupted、dispatched 无关联条目的输入→pending 且队列 paused、running/dispatched 工具→unknown 并写隔离；对各断点注入崩溃的测试全部通过
+  - 已做：`AgentHost.reconcile()` 以 entry ID 重建投影，在一次运行结束和读取消息时调用
+  - 未做：没有"清空投影后重建一致""已写 Pi 未投影后补齐且不重复"两条测试；没有在 `turn_end`/启动时拉取
+  - 说明：`tests/projection.test.ts` 7 条：清空投影后重建与原来完全一致、陈旧行与错误游标被替换而非合并、Pi 已写而投影未更新时补齐且只出现一次、重复读取与重启不产生重复、游标跟随 Pi 最后一条
+  - 与任务原文的差异：投影是整体删除后重建（结果幂等，但不是按 entry ID 逐条 upsert）；触发点是一次运行结束、读取消息、启动恢复，没有挂在 `turn_end`/`agent_settled` 事件上；启动时只对有被 claim 输入的会话对账，其余会话在首次读取时对账
+- [x] 2.4 实现 drafts（中断片段）与 `her.run` 关联条目；测试中断片段不进入后续上下文
+  - 说明：停止时已说出的文字存入 `draft_fragments`（`interrupted-text`），`her.run` 条目关联请求与任务；`tests/draft-fragments.test.ts` 5 条
+  - 注意："片段不进入后续上下文"并非 Her 的代码所致，而是 Pi 在转换历史时整条跳过 `stopReason` 为 `error`/`aborted` 的助手消息（pi-ai `transform-messages.js`）。测试固定了该行为，升级 Pi 时会暴露变化
+  - 未做：`draft_fragments` 只写不读，界面上的"中断片段标记"（9.2）尚未用它
+- [x] 2.5 实现启动恢复：非终态任务→interrupted、dispatched 无关联条目的输入→pending 且队列 paused、running/dispatched 工具→unknown 并写隔离；对各断点注入崩溃的测试全部通过
+  - 说明：重启时任务标为 interrupted；被 claim 的输入按 Pi 会话记录分流——用户消息未写入 Pi 则放回队列（仍暂停），已写入则关闭为取消、不重发，并补一条失败的助手消息；读不出会话一律不重发；工具账本沿用 `ActionLedger.recover()`。`tests/startup-recovery.test.ts` 16 条
+  - 同时修了一个真实缺陷：重启后点"继续队列"会把消息卡在 running（先 claim 后取事件接收端，失败时无法回退）
+  - 未覆盖：崩溃发生在 SQLite 写入与 Pi 写入之间的更细断点只测了代表性的 4 个阶段；`approval`/`waiting_resource` 状态的任务没有单独测
 - [ ] 2.6 会话文件损坏时保留原文件、隔离会话并报错；测试其他会话可正常发送
-- [ ] 2.7 确认单实例锁覆盖新资料目录（第二实例不写入）；补充测试或手动验证记录
-
+  - 已做：整个文件无法识别时，读取和发送都被拒绝，提示为不带路径的中文，原文件字节不变，只影响该对话；其他对话照常（`tests/session-damage.test.ts` 7 条）
+  - 未做：文件中间夹着坏行时 Pi 会静默跳过，Her 没有检测也没有提示（测试只是固定了这一现状）；没有持久的"已隔离"标记，每次访问各自报错
+- [x] 2.7 确认单实例锁覆盖新资料目录（第二实例不写入）；补充测试或手动验证记录
+  - 手动验证记录（`experiments/pi-sdk-1.3.0/single-instance.sh`，未打包的开发版 Electron 44.7.0，macOS）：同一 `HER_DATA_DIR` 下先后启动两个实例，第二个 1 秒内以退出码 0 退出；第二个实例前后 `Her-Pi-v1` 内文件的路径、大小、修改时间无任何差异；第一个实例全程运行
+  - 说明：锁在 `app.whenReady` 之前由 `requestSingleInstanceLock()` 取得，`start()` 只在拿到锁的分支里执行；锁跟随 `userData`，所以不同数据目录的实例互不影响
+  - 未验证：打包后的 `.app`；两个实例几乎同时启动的竞争情形
 ## 3. 模型接入与凭据
 
 - [ ] 3.1 profile 模型改为“Pi 目录模型 | 自定义兼容服务”，自定义服务必填上下文容量，认证方式 `api-key | headers | none`；`tests/profiles.test.ts` 覆盖校验与缺容量拒绝
@@ -29,13 +50,22 @@
 
 ## 4. Agent 宿主与并行会话
 
-- [ ] 4.1 新建 `src/core/agent/factory.ts`，集中受控注入并在创建后比对工具白名单；测试白名单外工具导致拒绝启动
+- [x] 4.1 新建 `src/core/agent/factory.ts`，集中受控注入并在创建后比对工具白名单；测试白名单外工具导致拒绝启动
+  - 说明：`tests/agent-factory.test.ts` 5 条中的 3 条针对白名单：暴露的工具与传入的完全一致且无内置工具、传入空集则为空、集合不一致时拒绝启动。已验证：临时关闭该检查后"拒绝启动"那条会失败
+  - 局限："不一致"只构造了同名工具这一种情形，其他导致集合不符的途径没有逐一模拟；工厂文件在 `src/core/agent/factory.ts`，任务里提到的 `handle.ts` 属于 4.2
 - [ ] 4.2 新建 `handle.ts` 与 `host.ts`：按 conversationId 的句柄、generation、runId、单调 seq，旧代次事件丢弃；测试 A/B 同时流式、停止 A 不影响 B、迟到事件不改写新任务
 - [ ] 4.3 新建 `events.ts`，Pi 事件映射为 Her `TaskEvent`（含全部任务状态）；测试“模型回答结束但仍调用工具时保持 running”
-- [ ] 4.4 模型请求重试最多两次（Pi 公开设置），认证/校验/取消不重试，重试不重放工具；模拟服务测试三种情况
-- [ ] 4.5 `ChatService` 收缩为门面委托 `AgentHost`，删除 `active` 单例、`generate()` 与 50 条 / 64,000 字符截断；测试超过旧界限的历史仍进入上下文，`tests/chat.test.ts` 按新行为重写并通过
+- [x] 4.4 模型请求重试最多两次（Pi 公开设置），认证/校验/取消不重试，重试不重放工具；模拟服务测试三种情况
+  - 说明：Pi 重试开启、最多 2 次（`MODEL_RETRIES`）；`tests/model-retry.test.ts` 15 条，连续 3 次全过：503 在三种协议下重试后完成、最多共 3 次请求后失败、401 在三种协议下只请求 1 次、被拒绝的重定向只请求 1 次、用户停止后不重启、空回复不重试、工具结果之后的请求失败重试时工具仍只运行 1 次
+  - 发现并修了两个真实缺陷：(1) OpenAI SDK 把所有失败都改写成 "Connection error."，Pi 会把它当可重试，导致 401 也被重试三次——现在 fetch 包装在遇到非暂时性状态码或被拒重定向时关闭本次运行的重试；(2) 第一次尝试已流出的文字在重试后没清掉，回复变成 "你好🌙你好🌙"——现在收到 `auto_retry_start` 时清空并通知界面
+  - 局限："暂时性"的状态码清单（408/425/429/500/502/503/504/529）是我定的，不是来自设计文档；断流类错误依赖 Pi 的正则判断；退避时间默认 2 秒起、每次翻倍，测试里用 `retryPolicy` 缩短；没有用真实服务验证
+- [x] 4.5 `ChatService` 收缩为门面委托 `AgentHost`，删除 `active` 单例、`generate()` 与 50 条 / 64,000 字符截断；测试超过旧界限的历史仍进入上下文，`tests/chat.test.ts` 按新行为重写并通过
+  - 说明：`ChatService` 只是委托 `AgentHost` 的门面，没有 `active` 单例、`generate()` 或 50 条 / 64,000 字符截断；`tests/agent-factory.test.ts` 另 2 条证明 120 条旧消息、以及超过 64,000 字符的旧历史都会从第一条起送到模型
+  - 局限：`tests/chat.test.ts` 已删除而不是"按新行为重写"，其覆盖的主题逐项对照后分散在 host-*、attachments、tool-*、system-prompt、model-selection、retry 等新测试里
 - [ ] 4.6 任务冻结配置快照，禁用服务/删除凭据/撤销工具授权立即停止相关任务；测试运行中改名不影响当前任务、禁用服务立即停止
-
+  - 已做（`tests/config-freeze.test.ts` 9 条；临时关闭宿主订阅后其中 5 条失败，说明测试有效）：删除模型服务、替换或移除 API Key、更改服务地址，都会立即停止正在使用该服务的回复、说明原因并暂停该会话队列；仅改名或改模型列表不影响运行中的回复；只停使用该服务的运行，其他会话照常；之后的任务使用新配置。撤销文件授权的停止见 7.3；运行中改配置不改变当前任务所用模型由 `validateRuntime` 的版本比对保证
+  - 未做：禁用或修改 MCP 服务时，运行中的任务不会被停止——工具调用会因配置失效而失败，但回复本身继续；运行没有记录自己用过哪些 MCP 服务，要做需先决定"相关任务"的范围（用过该服务工具的运行，还是该会话所有运行）
+  - 局限："暂时性"之外的配置变化（例如仅改最大输出）按连接是否变化判断，没有逐项列举
 ## 5. 工具执行门、资源队列与未知动作
 
 - [x] 5.1 新建 `src/core/tools/gate.ts`，把注册表工具包装为 Pi custom tools，按 Her schema 二次校验；测试非法参数不执行、历史工具名不构成权限
@@ -87,11 +117,16 @@
 - [ ] 9.3 `SettingsPanel.tsx`：目录模型/自定义服务、认证方式、上下文容量；`TrashPanel.tsx`：清理未完成与重试；渲染测试通过
   - 已做：上下文容量输入框、认证方式只读显示
   - 未做：认证方式显式选择（现在由是否填了 Key/请求头推断）；Pi 目录模型选择（依赖阶段 3）；`TrashPanel` 的清理失败保留与重试
-- [ ] 9.4 更新 `AGENTS.md` 中的技术栈、项目结构、IPC 与数据目录说明，使之与新实现一致
+- [x] 9.4 更新 `AGENTS.md` 中的技术栈、项目结构、IPC 与数据目录说明，使之与新实现一致
+  - 已核对：文中提到的路径都存在；React 19、Electron 44、Pi SDK 1.3.0；数据目录 `<userData>/Her-Pi-v1/`（her.sqlite、pi/sessions、pi/workspaces、artifacts、documents）；IPC 命名 `her:<主题>-<动作>`，类型在 `HerApi`；`safeStorage` 加密不可用时拒绝保存；关闭时 5 秒后强杀；删除了不存在的 `core/llm`、`docs/API.md`、`CHANGELOG.md`、ESLint 引用；UI 设计规范未改
+  - 未写入文档：`handle.ts`、`agent-ipc.ts`、`events.ts` 当前没有被任何文件引用，留待 4.2/4.3 决定保留还是删除
 
 ## 10. 删除旧路径与完整验收
 
-- [ ] 10.1 删除 `src/core/providers/stream.ts`、`sse.ts`、`message-format.ts`、旧 `probe.ts` 及其测试与引用；`npm run check` 通过且 grep 无残留引用
+- [x] 10.1 删除 `src/core/providers/stream.ts`、`sse.ts`、`message-format.ts`、旧 `probe.ts` 及其测试与引用；`npm run check` 通过且 grep 无残留引用
+  - 验证：`npm run check` 退出码 0（类型错误 0，59 个测试文件通过：918 通过、1 跳过，构建三段完成）；`src`、`tests` 中对 `providers/stream|sse|message-format|probe`、`streamChat`、`formatModelMessages` 的引用为 0；`src/core/providers/` 已删除
+  - 被删的测试：`providers.test.ts`、`chat.test.ts`（旧流式循环与旧 ChatService 构造）；其行为在新测试中的对应已逐项核对，缺的几项（系统提示拼装、重试、模型选择、未知动作处理）已补实现和测试
+  - 说明：旧的"50 条 / 64,000 字符截断"在 `src` 中已无残留（对应 4.5 的一部分）
 - [ ] 10.2 按方案 §14 验收表逐项在模拟服务下运行（并行、队列、冲突资源、未知动作、压缩、来源失效、多存储恢复、模型认证、清理、生命周期），结果记录到 `experiments/pi-sdk-1.3.0/ACCEPTANCE.md`
 - [ ] 10.3 用用户明确配置的真实服务验证聊天、工具往返、容量、压缩、取消和认证，在打包后的 macOS `.app` 中执行 `npm run test:e2e`，结果记录到 ACCEPTANCE.md
 

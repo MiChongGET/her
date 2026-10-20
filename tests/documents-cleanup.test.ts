@@ -111,19 +111,6 @@ it('purge retains unfinished ownership when an admitted staging write completes 
 })
 
 import { DatabaseSync } from 'node:sqlite'
-// Her-Pi v1 is schema version 1 only (checked in HerStore's constructor); pre-Pi numeric migrations (v0-v12) do not apply.
-it.skip('migrates published v10 cache ownership without deleting readable text', async () => {
-  const f = await setup()
-  const service = new DocumentService(f.store, f.files, () => ({ version: 'test', configuration: '1', validate: () => {}, convert: async () => 'published text' }))
-  const reference = await service.extract(f.file.id, f.context)
-  const raw = new DatabaseSync(f.path); raw.exec('DROP TABLE artifact_owners; DROP TABLE document_owners; PRAGMA user_version=10;'); raw.close()
-  f.reopen()
-  expect(f.store.getDocument(reference.id)?.reference).toEqual(reference)
-  expect(f.store.listDocumentOwners(f.context.conversationId)).toEqual([{ id: reference.id, published: 1 }])
-  expect(await f.cache.read(reference.id)).toBe('published text')
-  f.store.trashConversation(f.context.conversationId); f.store.purgeConversation(f.context.conversationId)
-  expect(await f.cache.read(reference.id)).toBeUndefined(); expect(await readFile(f.original, 'utf8')).toBe('original bytes')
-})
 it('a SQL rollback preserves ownership/history while an evicted cache can regenerate from authorized source', async () => {
   const f = await setup()
   const convert = vi.fn(async () => 'published text')

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { HerStore } from '../../src/core/storage/store'
 import { ProfileService } from '../../src/core/storage/profiles'
 import { AgentHost } from '../../src/core/agent/host'
+import { retryPolicy } from '../../src/core/agent/factory'
 import { FileAccessService } from '../../src/core/files/access'
 import { ChatService } from '../../src/core/conversation/chat'
 import type { ChatEvent, RequestEvent } from '../../src/shared/types'
@@ -12,6 +13,9 @@ import type { ChatEvent, RequestEvent } from '../../src/shared/types'
 /** Cleanups registered by harnesses; each test file runs them in afterEach. */
 export const harnessCleanup: (() => void | Promise<void>)[] = []
 const codec = { encrypt: async (text: string) => Buffer.from(text), decrypt: async (bytes: Buffer) => bytes.toString() }
+
+/** Real backoff is seconds long; tests that are not about timing use a few milliseconds. */
+retryPolicy.baseDelayMs = 10
 
 export function harness(directory = mkdtempSync(join(tmpdir(), 'her-host-queue-')), toolsFor?: ConstructorParameters<typeof AgentHost>[3], withFiles = false) {
   const store = new HerStore(join(directory, 'her.sqlite'))

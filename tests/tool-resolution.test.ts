@@ -1,97 +1,171 @@
-import { expect, it } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { HerStore } from '../src/core/storage/store'
-import { ChatService } from '../src/core/conversation/chat'
-import { ProfileService } from '../src/core/storage/profiles'
-import type { TaskRun } from '../src/shared/types'
-function seed(store: HerStore) {
-  const conversation = store.createConversation()
-  const run: TaskRun = { id: 'original', conversationId: conversation.id, requestId: 'r', assistantMessageId: 'm', providerId: 'p', model: 'm', status: 'stopped', toolCallsCount: 1, activeMs: 0 }
-  store.saveTaskRun(run)
-  store.saveToolCall({ id: 'call', runId: run.id, name: 'click', arguments: { target: 'e1' }, status: 'unknown', startedAt: '2026-10-15', finishedAt: '2026-10-15', result: { isError: true, content: [] }, assessment: { effect: 'unknown', target: 'browser:b:action', summary: 'Click Send; may reset crashed tab' }, dispatchPhase: 'action' })
-  store.saveTaskRun({ ...run, id: 'later', requestId: 'later', assistantMessageId: 'later' })
-  return conversation.id
+import { randomUUID } from 'node:crypto'
+import { afterEach, describe, expect, it } from 'vitest'
+import { startFixtureServer, type Scenario } from './pi-sdk/wire'
+import { harness, harnessCleanup } from './helpers/host-harness'
+
+const cleanup: (() => void | Promise<void>)[] = []
+afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
+const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+type Fixture = ReturnType<typeof harness>
+async function server(scenario: Scenario | Scenario[], options: Parameters<typeof startFixtureServer>[2] = {}) {
+  const s = await startFixtureServer('openai', scenario, options); cleanup.push(s.close); return s
 }
-it('resolves exact older unknown explicitly, persists separate audit across restart and never rewrites original outcome', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'her-resolution-')), path = join(dir, 'db')
-  let store = new HerStore(path)
-  try {
-    const id = seed(store), before = store.listToolCalls('original')[0]
-    const pending = store.listUnresolvedToolCalls(id)
-    expect(pending).toHaveLength(1); expect(pending[0].runId).toBe('original')
-    store.resolveUnknownToolCall({ conversationId: id, ...pending[0], decision: 'handled' })
-    expect(store.getUnknownToolTargets(id)).toEqual([])
-    expect(store.listToolCalls('original')[0]).toMatchObject({ ...before, status: 'unknown', resolution: { decision: 'handled' } })
-    expect(() => store.resolveUnknownToolCall({ conversationId: id, ...pending[0], decision: 'handled' })).toThrow()
-    store.close(); store = new HerStore(path)
-    expect(store.getUnknownToolTargets(id)).toEqual([])
-    expect(store.listToolCalls('original')[0].status).toBe('unknown')
-    expect(store.listToolCalls('original')[0].resolution?.decision).toBe('handled')
-  } finally { store.close(); rmSync(dir, { recursive: true, force: true }) }
-})
-it('rejects stale token, wrong conversation and nonunknown calls without clearing any target', () => {
-  const store = new HerStore(':memory:')
-  try {
-    const id = seed(store), pending = store.listUnresolvedToolCalls(id)[0], other = store.createConversation()
-    for (const change of [{ revision: 'stale' }, { conversationId: other.id }, { callId: 'missing' }]) expect(() => store.resolveUnknownToolCall({ conversationId: id, ...pending, decision: 'abandoned', ...change })).toThrow()
-    expect(store.getUnknownToolTargets(id)).toEqual(['browser:b:action'])
-    store.saveToolCall({ ...store.listToolCalls('original')[0], result: 'late replacement' })
-    expect(() => store.resolveUnknownToolCall({ conversationId: id, ...pending, decision: 'handled' })).toThrow()
-  } finally { store.close() }
-})
-it('exposes older unresolved calls in task state and blocks human resolution during active preparation', async () => {
-  const store = new HerStore(':memory:'), id = seed(store), profiles = new ProfileService(store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1', model: 'm' })
-  let release!: () => void
-  const gate = new Promise<void>(resolve => { release = resolve })
-  const chat = new ChatService(store, profiles, () => {}, () => '', undefined, undefined, undefined, () => gate)
-  const pending = chat.getConversationTask(id)!.unknownCalls![0]
-  const sending = chat.send({ requestId: 'active', conversationId: id, profileId: profile.id, content: 'x' }).catch(() => {})
-  try {
-    expect(() => chat.resolveUnknownToolCall({ conversationId: id, ...pending, decision: 'handled' })).toThrow(/停止|运行|生成/)
-    chat.cancelActive(); release(); await sending
-    expect(chat.resolveUnknownToolCall({ conversationId: id, ...pending, decision: 'abandoned' })?.unknownCalls).toEqual([])
-  } finally { release(); chat.cancelActive(); store.close() }
-})
+async function profile(f: Fixture, baseUrl: string) {
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+}
+/** A task that ended (stopped) after dispatching an action whose outcome is unknown, with its target quarantined. */
+function stoppedWithUnknown(f: Fixture, options: { conversationId?: string; target?: string; callId?: string; taskId?: string } = {}) {
+  const conversationId = options.conversationId ?? f.id, target = options.target ?? 'browser:b:action', callId = options.callId ?? 'call'
+  const requestId = randomUUID(), taskId = options.taskId ?? randomUUID(), assistantMessageId = randomUUID()
+  f.store.enqueueInput(conversationId, 'do it', null, requestId, { userMessageId: randomUUID() })
+  f.store.claimInput(requestId); f.store.updateInputStatus(requestId, 'cancelled')
+  f.store.createTask({ id: taskId, conversationId, requestId, generation: 0, status: 'stopped', serviceId: 's', modelId: 'm', configRevision: 1, error: null, assistantMessageId })
+  f.store.insertToolCall({ taskId, callId, toolName: 'click', args: '{"target":"e1"}', effect: 'unknown', target })
+  f.store.updateToolCall(taskId, callId, { status: 'unknown', phase: 'action', dispatched: true, result: '{"isError":true,"content":[]}' })
+  f.store.quarantineTarget(target, conversationId, taskId, callId)
+  return { taskId, callId, target, requestId, assistantMessageId }
+}
+const pendingOf = (f: Fixture, conversationId = f.id) => f.store.listUnresolvedToolCalls(conversationId)
 
-import { SimpleToolRegistry } from '../src/core/tools/registry'
-import { ToolApprovalService } from '../src/core/tools/approval'
-it('sends the human resolution as additional Host context without altering the original stored tool error', async () => {
-  const store = new HerStore(':memory:'), id = seed(store), original = store.listToolCalls('original')[0]
-  store.addMessage({ id: 'user', conversationId: id, role: 'user', content: 'Handle this task', status: 'complete', createdAt: '2026-10-15' })
-  store.addMessage({ id: 'later', conversationId: id, role: 'assistant', content: 'unknown', status: 'cancelled', createdAt: '2026-10-15', toolCalls: [original] })
-  const profiles = new ProfileService(store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1', model: 'm' })
-  let text = '', done!: () => void
-  const finished = new Promise<void>(resolve => { done = resolve })
-  const chat = new ChatService(store, profiles, event => { if (event.done) done() }, () => '', async function* (input) {
-    text = JSON.stringify(input.messages); yield { type: 'text', text: 'Continue with fresh observation and approval' }; yield { type: 'done' }
+describe('deciding about an unknown outcome', () => {
+  it('lists it with a revision, and lifting it records a separate decision without rewriting the call', () => {
+    const f = harness(), u = stoppedWithUnknown(f)
+    const before = f.store.getToolCallRecord(u.taskId, u.callId)!
+    const [pending] = pendingOf(f)
+    expect(pending).toMatchObject({ runId: u.taskId, callId: u.callId, dispatchPhase: 'action' })
+    expect(pending.summary).toContain('click')
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' })
+    expect(f.store.listQuarantinedTargets()).toEqual([])
+    expect(f.store.getToolCallRecord(u.taskId, u.callId)).toEqual({ ...before, resolution: 'handled' })
+    expect(f.store.getToolCallRecord(u.taskId, u.callId)!.status).toBe('unknown')
+    expect(pendingOf(f)).toEqual([])
   })
-  try {
-    chat.resolveUnknownToolCall({ conversationId: id, ...store.listUnresolvedToolCalls(id)[0], decision: 'abandoned' })
-    await chat.continueTask({ runId: 'later', requestId: 'new', profileId: profile.id }); await finished
-    expect(text).toContain('用户已放弃'); expect(text).toContain('不得重放')
-    expect(store.listToolCalls('original')[0].result).toEqual(original.result)
-  } finally { chat.shutdown(); store.close() }
+
+  it('cannot be decided twice, and the decision survives a restart', () => {
+    const f = harness(), u = stoppedWithUnknown(f)
+    const [pending] = pendingOf(f), input = { conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'abandoned' as const }
+    f.host.resolveUnknownToolCall(input)
+    expect(() => f.host.resolveUnknownToolCall(input)).toThrow('已经变化或已处理')
+    f.store.close()
+    const reopened = harness(f.directory)
+    expect(reopened.store.getToolCallRecord(u.taskId, u.callId)).toMatchObject({ status: 'unknown', resolution: 'abandoned' })
+    expect(reopened.store.listQuarantinedTargets()).toEqual([])
+  })
+
+  it.each([
+    ['a stale revision', { revision: 'stale' }],
+    ['a call id that does not exist', { callId: 'missing' }],
+    ['a different decision value', { decision: 'maybe' }]
+  ])('rejects %s and changes nothing', (_name, change) => {
+    const f = harness(), u = stoppedWithUnknown(f), [pending] = pendingOf(f)
+    const input = { conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' as const, ...change }
+    expect(() => f.host.resolveUnknownToolCall(input as never)).toThrow()
+    expect(f.store.listQuarantinedTargets()).toEqual([u.target])
+    expect(pendingOf(f)).toHaveLength(1)
+  })
+
+  it('rejects a call that belongs to another conversation', () => {
+    const f = harness(), u = stoppedWithUnknown(f), [pending] = pendingOf(f)
+    expect(() => f.host.resolveUnknownToolCall({ conversationId: f.other, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' })).toThrow()
+    expect(f.store.listQuarantinedTargets()).toEqual([u.target])
+  })
+
+  it('rejects a call whose outcome was in fact known', () => {
+    const f = harness(), u = stoppedWithUnknown(f)
+    f.store.updateToolCall(u.taskId, u.callId, { status: 'succeeded' })
+    expect(() => f.host.resolveUnknownToolCall({ conversationId: f.id, runId: u.taskId, callId: u.callId, revision: 'x', decision: 'handled' })).toThrow()
+    expect(f.store.getToolCallRecord(u.taskId, u.callId)!.resolution).toBeNull()
+  })
+
+  it('lifts the block on a target only when no other unresolved unknown outcome points at it', () => {
+    const f = harness()
+    const first = stoppedWithUnknown(f, { callId: 'one' }), second = stoppedWithUnknown(f, { callId: 'two' })
+    const [a, b] = pendingOf(f)
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: a.runId, callId: a.callId, revision: a.revision, decision: 'handled' })
+    expect(f.store.listQuarantinedTargets()).toEqual([first.target])
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: b.runId, callId: b.callId, revision: b.revision, decision: 'handled' })
+    expect(f.store.listQuarantinedTargets()).toEqual([])
+    void second
+  })
+
+  it('leaves another conversation\'s unknown outcome and quarantine alone', () => {
+    const f = harness()
+    stoppedWithUnknown(f, { target: 'target:a' }); stoppedWithUnknown(f, { conversationId: f.other, target: 'target:b' })
+    const [mine] = pendingOf(f)
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: mine.runId, callId: mine.callId, revision: mine.revision, decision: 'handled' })
+    expect(f.store.listQuarantinedTargets()).toEqual(['target:b'])
+    expect(pendingOf(f, f.other)).toHaveLength(1)
+  })
+
+  it('a lifted target is not trusted again for a fresh interaction: it needs approval once more', async () => {
+    const f = harness(), u = stoppedWithUnknown(f), [pending] = pendingOf(f)
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' })
+    const { ActionLedger } = await import('../src/core/tools/ledger')
+    expect(new ActionLedger(f.store).recovered(u.target)).toBe(true)
+  })
 })
 
-import { DatabaseSync } from 'node:sqlite'
-it('migrates v7 unknown history intact and preserves crash phase semantics across v8 reopen', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'her-v7-')), path = join(dir, 'db')
-  let store = new HerStore(path)
-  try {
-    const id = seed(store); store.close()
-    const db = new DatabaseSync(path)
-    db.exec('DROP TABLE artifact_owners; DROP TABLE document_owners; DROP TABLE documents; DROP TABLE file_references; DROP TABLE file_grants; ALTER TABLE messages DROP COLUMN files; ALTER TABLE messages DROP COLUMN file_sources; DROP TABLE tool_resolutions; ALTER TABLE tool_executions DROP COLUMN dispatch_phase; PRAGMA user_version=7;'); db.close()
-    store = new HerStore(path)
-    expect(store.listToolCalls('original')[0]).toMatchObject({ status: 'unknown', arguments: { target: 'e1' } })
-    store.saveToolCall({ id: 'inflight', runId: 'original', name: 'click', arguments: {}, status: 'running', dispatchPhase: 'preflight', assessment: { effect: 'unknown', target: 'browser:x:action', summary: 'reset' } })
-    store.saveToolCall({ id: 'completed-preflight', runId: 'original', name: 'click', arguments: {}, status: 'pending', dispatchPhase: 'preflight-completed', assessment: { effect: 'unknown', target: 'browser:y:action', summary: 'not sent' } })
-    store.close(); store = new HerStore(path)
-    expect(store.listToolCalls('original').find(call => call.id === 'inflight')).toMatchObject({ status: 'unknown', dispatchPhase: 'preflight' })
-    expect(store.listToolCalls('original').find(call => call.id === 'completed-preflight')).toMatchObject({ status: 'cancelled', dispatchPhase: 'preflight-completed' })
-    expect(store.getUnknownToolTargets(id)).not.toContain('browser:y:action')
-  } finally { store.close(); rmSync(dir, { recursive: true, force: true }) }
+describe('what the task view shows', () => {
+  it('shows a stopped task with its unresolved unknown outcomes, tied to the reply it was producing', () => {
+    const f = harness(), u = stoppedWithUnknown(f)
+    const task = f.chat.getConversationTask(f.id)!
+    expect(task.run).toMatchObject({ id: u.taskId, status: 'stopped', assistantMessageId: u.assistantMessageId, toolCallsCount: 1 })
+    expect(task.unknownCalls).toHaveLength(1)
+  })
+
+  it('stops listing the unknown outcome once it is decided, and a finished clean task shows nothing', () => {
+    const f = harness(), u = stoppedWithUnknown(f), [pending] = pendingOf(f)
+    const after = f.host.resolveUnknownToolCall({ conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' })
+    expect(after?.unknownCalls).toBeUndefined()
+    f.store.updateTaskStatus(u.taskId, 'completed')
+    expect(f.chat.getConversationTask(f.id)).toBeNull()
+  })
+
+  it('returns nothing for a conversation that never ran a task', () => {
+    expect(harness().chat.getConversationTask(randomUUID())).toBeNull()
+  })
+
+  it('refuses to decide while the conversation is running, and allows it once the task is stopped', async () => {
+    const s = await server(['hang', 'text'])
+    const f = harness(), p = await profile(f, s.baseUrl), u = stoppedWithUnknown(f), [pending] = pendingOf(f)
+    const running = await f.send(f.id, p.id, 'go')
+    await expect.poll(() => s.requests.length).toBe(1)
+    const input = { conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'handled' as const }
+    expect(() => f.host.resolveUnknownToolCall(input)).toThrow(/停止|运行/)
+    expect(f.store.listQuarantinedTargets()).toEqual([u.target])
+    f.chat.cancel(running.requestId)
+    await expect.poll(() => f.finished(running.requestId)?.state, { timeout: 10_000 }).toBe('cancelled')
+    expect(() => f.host.resolveUnknownToolCall(input)).not.toThrow()
+    expect(f.store.listQuarantinedTargets()).toEqual([])
+  }, 20_000)
+})
+
+describe('continuing after a human decision', () => {
+  it('tells the model what the person decided and that the outcome is still unknown, and keeps the stored result as it was', async () => {
+    const s = await server('text')
+    const f = harness(), p = await profile(f, s.baseUrl), u = stoppedWithUnknown(f)
+    const original = f.store.getToolCallRecord(u.taskId, u.callId)!.result
+    const [pending] = pendingOf(f)
+    f.host.resolveUnknownToolCall({ conversationId: f.id, runId: u.taskId, callId: u.callId, revision: pending.revision, decision: 'abandoned' })
+    const requestId = randomUUID()
+    await f.chat.continueTask({ runId: u.taskId, requestId, profileId: p.id })
+    await expect.poll(() => f.finished(requestId)?.state, { timeout: 15_000 }).toBe('completed')
+    const body = JSON.stringify(s.requests.at(-1)!.body)
+    expect(body).toContain('用户已放弃')
+    expect(body).toContain('不得重放')
+    expect(f.store.getToolCallRecord(u.taskId, u.callId)).toMatchObject({ result: original, status: 'unknown' })
+  }, 30_000)
+
+  it('without a decision, the model is told to re-observe instead', async () => {
+    const s = await server('text')
+    const f = harness(), p = await profile(f, s.baseUrl), u = stoppedWithUnknown(f)
+    const requestId = randomUUID()
+    await f.chat.continueTask({ runId: u.taskId, requestId, profileId: p.id })
+    await expect.poll(() => f.finished(requestId)?.state, { timeout: 15_000 }).toBe('completed')
+    const body = JSON.stringify(s.requests.at(-1)!.body)
+    expect(body).toContain('不要重复执行')
+    expect(body).not.toContain('用户已处理')
+    await wait(10)
+  }, 30_000)
 })

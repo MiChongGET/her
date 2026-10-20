@@ -2,39 +2,11 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { HerStore } from '../src/core/storage/store'
 import { ProfileService } from '../src/core/storage/profiles'
 import { McpConfigService } from '../src/core/mcp/config'
-import { ChatService } from '../src/core/conversation/chat'
 import { SimpleToolRegistry } from '../src/core/tools/registry'
 import { createShutdown } from '../src/main/shutdown'
 
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done }); return { promise, resolve } }
 afterEach(() => vi.useRealTimers())
-
-it('admits before deferred preparation, keeps the global slot, and stop prevents late model/action dispatch', async () => {
-  const store = new HerStore(':memory:')
-  const profiles = new ProfileService(store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() })
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm' })
-  const conversation = store.createConversation()
-  const gate = deferred<void>()
-  let generated = 0
-  const events: import('../src/shared/types').RequestEvent[] = []
-  const chat = new ChatService(store, profiles, () => {}, () => '', async function* () { generated++; yield { type: 'done' } }, new SimpleToolRegistry(), undefined, () => gate.promise, event => events.push(event))
-  const input = { requestId: 'first', conversationId: conversation.id, profileId: profile.id, content: 'go' }
-  const sending = chat.send(input)
-  expect(chat.getActiveRequest()).toEqual({ requestId: input.requestId, conversationId: input.conversationId })
-  await expect(chat.send({ ...input, requestId: 'second' })).rejects.toThrow('还有')
-  chat.cancelActive()
-  await expect(sending).rejects.toThrow('取消')
-  expect(chat.getActiveRequest()).toBeNull()
-  gate.resolve()
-  await new Promise(resolve => setImmediate(resolve))
-  expect(generated).toBe(0)
-  expect(events).toEqual([
-    { requestId: input.requestId, conversationId: conversation.id, state: 'started' },
-    { requestId: input.requestId, conversationId: conversation.id, state: 'cancelled' }
-  ])
-  expect(store.getMessages(conversation.id)).toEqual([])
-  store.close()
-})
 
 it('fences late config and profile crypto beyond the single five-second shutdown deadline', async () => {
   vi.useFakeTimers()
@@ -44,7 +16,7 @@ it('fences late config and profile crypto beyond the single five-second shutdown
   const codec = { encrypt: () => gate.promise, decrypt: async (bytes: Buffer) => bytes.toString() }
   const profiles = new ProfileService(store, codec, lifetime.signal)
   const configs = new McpConfigService(store, codec, lifetime.signal)
-  const saves = [profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm', apiKey: 'secret' }), configs.save({ name: 'm', enabled: true, transport: 'stdio', command: 'node', args: [], secretValues: { TOKEN: 'secret' } })]
+  const saves = [profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm', authMethod: 'api-key', apiKey: 'secret' }), configs.save({ name: 'm', enabled: true, transport: 'stdio', command: 'node', args: [], secretValues: { TOKEN: 'secret' } })]
   const results = Promise.allSettled(saves)
   const access = vi.spyOn(store, 'getProfile'); const write = vi.spyOn(store, 'saveMcpService')
   const forced = vi.fn(); const close = vi.fn(() => store.close()); const stop = vi.fn()
@@ -62,7 +34,6 @@ it('fences late config and profile crypto beyond the single five-second shutdown
   expect(access).not.toHaveBeenCalled(); expect(write).not.toHaveBeenCalled()
 })
 
-import { testConnection } from '../src/core/providers/probe'
 import { ToolArtifactStore } from '../src/core/tools/artifacts'
 import { McpConnectionManager } from '../src/core/mcp/manager'
 import { mkdtempSync, rmSync, readdirSync } from 'node:fs'
@@ -76,33 +47,6 @@ vi.mock('node:fs/promises', async importOriginal => {
   return { ...actual, readFile: async (...args: Parameters<typeof actual.readFile>) => { const result = await actual.readFile(...args); await fileGate.read; return result }, writeFile: async (...args: Parameters<typeof actual.writeFile>) => { await actual.writeFile(...args); await fileGate.promise } }
 })
 
-it('fences late profile probe and artifact publication after five seconds, removing its orphan file', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'her-lifetime-'))
-  const store = new HerStore(join(directory, 'test.sqlite'))
-  const lifetime = new AbortController()
-  const profiles = new ProfileService(store, { encrypt: async text => Buffer.from(text), decrypt: async bytes => bytes.toString() }, lifetime.signal)
-  const profile = await profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm' })
-  const conversation = store.createConversation()
-  const gate = deferred<void>()
-  const probing = testConnection(profiles, profile.id, 'chat', async function* () { await gate.promise; yield { type: 'text', text: 'done' }; yield { type: 'done' } })
-  const artifacts = new ToolArtifactStore(store, lifetime.signal)
-  const existing = await artifacts.put(Buffer.from('old-image'), { conversationId: conversation.id }, 'image/png')
-  fileGate.read = gate.promise
-  const reading = artifacts.read(existing.id, { runId: 'preview', callId: 'preview', conversationId: conversation.id, signal: new AbortController().signal })
-  fileGate.promise = gate.promise
-  const writing = artifacts.put(Buffer.from('image'), { conversationId: conversation.id }, 'image/png')
-  const results = Promise.allSettled([probing, writing, reading])
-  await vi.waitFor(() => expect(readdirSync(store.artifactDirectory)).toHaveLength(2))
-  vi.useFakeTimers()
-  const shutdown = createShutdown({ lifetime, stop: () => {}, drain: () => results, forceClose: () => {}, close: () => store.close() })
-  const quit = shutdown()
-  await vi.advanceTimersByTimeAsync(5000); await quit
-  const reads = vi.spyOn(store, 'getProfile'); const writes = vi.spyOn(store, 'saveArtifact'); const auth = vi.spyOn(store, 'hasConversation'); const artifactRead = vi.spyOn(store, 'getArtifact')
-  gate.resolve(); await results
-  expect(reads).not.toHaveBeenCalled(); expect(writes).not.toHaveBeenCalled(); expect(auth).not.toHaveBeenCalled(); expect(artifactRead).not.toHaveBeenCalled()
-  expect(readdirSync(store.artifactDirectory)).toEqual([existing.id])
-  fileGate.promise = undefined; fileGate.read = undefined; rmSync(directory, { recursive: true, force: true })
-})
 
 it('late decrypted connection after DB closure cannot register tools or launch a process', async () => {
   const store = new HerStore(':memory:')

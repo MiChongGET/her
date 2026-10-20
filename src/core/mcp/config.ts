@@ -1,4 +1,3 @@
-// @ts-nocheck - TODO 10.5: Fix MCP service storage after core agent integration
 import { randomUUID } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { ConnectionTestResult, McpServiceConfig, McpTransportConfig, SaveMcpServiceInput } from '../../shared/types'
@@ -133,7 +132,7 @@ export class McpConfigService {
       secretKeys, hasSecrets: secretKeys.length > 0
     }
     this.lifetime?.throwIfAborted()
-    if (!this.store.saveMcpService({ config, sealedSecrets }, previous?.config.revision)) throw conflict()
+    if (!this.store.saveMcpService({ id: config.id, revision: config.revision, config, sealedSecrets }, previous?.config.revision)) throw conflict()
     this.changed({ serviceId: config.id, revision: config.revision, removed: false })
     return config
   }

@@ -1,44 +1,60 @@
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { _electron, expect, test } from '@playwright/test'
 import { HerStore } from '../../src/core/storage/store'
+import { dataPaths } from '../../src/core/storage/paths'
 
-test('human resolution of older unknown survives reload and restart without changing outcome or replaying tools', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'her-resolution-e2e-')), path = join(directory, 'her.sqlite')
-  const store = new HerStore(path), conversation = store.createConversation()
-  store.addMessage({ id: 'u', conversationId: conversation.id, role: 'user', content: '本地未知状态验收', status: 'complete', createdAt: new Date().toISOString() })
-  store.saveTaskRun({ id: 'old-run', requestId: 'old', conversationId: conversation.id, assistantMessageId: 'old-message', status: 'stopped', providerId: 'p', model: 'm', toolCallsCount: 1, activeMs: 1 })
-  const original = { id: 'unknown-call', runId: 'old-run', name: 'browser_click', arguments: { target: 'e1' }, status: 'unknown' as const, dispatchPhase: 'preflight' as const, assessment: { effect: 'unknown' as const, target: 'browser:fixture:action', summary: '本地验收：预检可能重建标签，最终点击未发出' }, result: { isError: true, content: [{ type: 'text' as const, text: 'fixture disconnect' }] } }
-  store.saveToolCall(original)
-  store.addMessage({ id: 'old-message', conversationId: conversation.id, role: 'assistant', content: '等待人工处理', status: 'cancelled', createdAt: new Date().toISOString(), toolCalls: [original] })
-  store.saveTaskRun({ id: 'latest-run', requestId: 'latest', conversationId: conversation.id, assistantMessageId: 'latest-message', status: 'stopped', providerId: 'p', model: 'm', toolCallsCount: 0, activeMs: 0 })
-  store.addMessage({ id: 'latest-message', conversationId: conversation.id, role: 'assistant', content: '仍有较早未知记录', status: 'cancelled', createdAt: new Date().toISOString() })
+test('human decision about an older unknown outcome survives reload and restart without changing the call or replaying tools', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'her-resolution-e2e-')), paths = dataPaths(directory)
+  const conversationId = randomUUID()
+  const store = new HerStore(paths.database)
+  store.createConversation(conversationId, randomUUID(), '本地未知状态验收')
+  // An older task that stopped after dispatching an action whose outcome is unknown, then a newer task that ended normally.
+  const seed = (taskId: string, status: 'stopped' | 'completed') => {
+    const requestId = randomUUID()
+    store.enqueueInput(conversationId, taskId, null, requestId); store.claimInput(requestId); store.updateInputStatus(requestId, 'cancelled')
+    store.createTask({ id: taskId, conversationId, requestId, generation: 0, status, serviceId: 's', modelId: 'm', configRevision: 1, error: null, assistantMessageId: `${taskId}-message` })
+  }
+  seed('old-run', 'stopped')
+  store.insertToolCall({ taskId: 'old-run', callId: 'unknown-call', toolName: 'browser_click', args: '{"target":"e1"}', effect: 'unknown', target: 'browser:b:action' })
+  store.updateToolCall('old-run', 'unknown-call', { status: 'unknown', phase: 'action', dispatched: true, result: '{"isError":true,"content":[]}' })
+  store.quarantineTarget('browser:b:action', conversationId, 'old-run', 'unknown-call')
+  seed('latest-run', 'stopped')
+  const before = store.getToolCallRecord('old-run', 'unknown-call')
   store.close()
+
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
-  let app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+  const launch = () => _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+  let app = await launch()
   try {
     let page = await app.firstWindow()
-    await expect(page.getByRole('button', { name: '已处理，解除阻塞' })).toBeVisible()
-    await expect(page.getByRole('button', { name: '已处理，解除阻塞' })).toBeDisabled()
-    const before = await page.evaluate(id => window.her.getConversationTask(id), conversation.id)
-    expect(before?.unknownCalls?.[0].runId).toBe('old-run')
+    const resolveButton = page.getByRole('button', { name: '已处理，解除阻塞' })
+    await expect(resolveButton).toBeVisible()
+    await expect(resolveButton).toBeDisabled()
+    const shown = await page.evaluate(id => window.her.getConversationTask(id), conversationId)
+    expect(shown?.unknownCalls?.[0].runId).toBe('old-run')
     await page.getByLabel(/我已在目标应用/).check()
-    await page.getByRole('button', { name: '已处理，解除阻塞' }).click()
+    await resolveButton.click()
     await expect(page.getByText(/已记录人工处理/)).toBeVisible()
-    expect(await page.evaluate(id => window.her.getConversationTask(id), conversation.id)).toMatchObject({ unknownCalls: [] })
+    expect((await page.evaluate(id => window.her.getConversationTask(id), conversationId))?.unknownCalls ?? []).toEqual([])
     await page.reload()
     await expect(page.getByRole('button', { name: '已处理，解除阻塞' })).toHaveCount(0)
     await app.close()
-    app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+    app = await launch()
     page = await app.firstWindow()
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
-    expect(await page.evaluate(id => window.her.getConversationTask(id), conversation.id)).toMatchObject({ unknownCalls: [], run: { id: 'latest-run' } })
+    const restarted = await page.evaluate(id => window.her.getConversationTask(id), conversationId)
+    expect(restarted?.unknownCalls ?? []).toEqual([])
+    expect(restarted?.run.id).toBe('latest-run')
   } finally { await app.close() }
   try {
-    const reopened = new HerStore(path)
-    expect(reopened.listToolCalls('old-run')[0]).toMatchObject({ ...original, resolution: { decision: 'handled' } })
-    expect(reopened.listToolCalls('latest-run')).toEqual([])
+    const reopened = new HerStore(paths.database)
+    // Only the decision was added: the call is still unknown, with its result untouched, and nothing was replayed.
+    expect(reopened.getToolCallRecord('old-run', 'unknown-call')).toEqual({ ...before, resolution: 'handled' })
+    expect(reopened.countToolCalls('latest-run')).toBe(0)
+    expect(reopened.listQuarantinedTargets()).toEqual([])
     reopened.close()
   } finally { rmSync(directory, { recursive: true, force: true }) }
 })

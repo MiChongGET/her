@@ -35,7 +35,7 @@ test('MCP settings, approval reload, hidden global stop, continuation and quit s
     const page = await app.firstWindow()
     await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
     await page.evaluate(async url => {
-      const profile = await window.her.saveProfile({ name: '本地工具验收模型', protocol: 'openai', baseUrl: url, model: 'model-a', models: [{ id: 'model-a' }, { id: 'model-b' }] })
+      const profile = await window.her.saveProfile({ name: '本地工具验收模型', protocol: 'openai', authMethod: 'none', baseUrl: url, model: 'model-a', models: [{ id: 'model-a' }, { id: 'model-b' }] })
       await window.her.selectProfile(profile.id)
     }, providerUrl)
     await page.reload()

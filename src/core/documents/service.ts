@@ -1,4 +1,3 @@
-// @ts-nocheck - TODO 10.5: Fix store method calls after core agent integration
 import { createHash, randomUUID } from 'node:crypto'
 import { extname } from 'node:path'
 import { pathToFileURL } from 'node:url'

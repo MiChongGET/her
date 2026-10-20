@@ -206,8 +206,13 @@ describe('switching models', () => {
 
   it('says plainly when the history cannot be made to fit the new window', async () => {
     const { f, big, small } = await two(1024, 200_000)
-    await say(f, big.id, long(3000))
-    await expect(f.chat.switchModel({ conversationId: f.id, profileId: small.id })).rejects.toThrow()
+    // About 1000 tokens of real history against 768 usable in a 1024 window (the stored system prompt is not counted).
+    await say(f, big.id, long(4000))
+    await expect(f.chat.switchModel({ conversationId: f.id, profileId: small.id })).rejects.toThrow('上下文太小')
+    const { openConversationHistory } = await import('../src/core/agent/factory')
+    const { manager } = await openConversationHistory(f.directory, f.store.getConversation(f.id)!)
+    // The switch was refused, so it was not recorded: the conversation still belongs to the previous model.
+    expect(manager.getEntries().some(entry => entry.type === 'custom' && entry.customType === 'her.model')).toBe(false)
     await wait(10)
   }, 60_000)
 })

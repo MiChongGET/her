@@ -161,6 +161,16 @@ describe('sending files (7.1)', () => {
     expect(bodies(s)[0]).toContain(`data:image/png;base64,${png.toString('base64')}`)
   }, 30_000)
 
+  it('a granted file that has since vanished does not get in the way of an ordinary message', async () => {
+    const s = await server('text')
+    const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl)
+    const file = await attach(f, 'vanishing.txt', 'old')
+    rmSync(file.path)
+    await say(f, p.id, 'hello, nothing attached')
+    expect(bodies(s)[0]).not.toContain('vanishing.txt')
+    expect((await f.chat.getMessages(f.id)).map(message => message.status)).toEqual(['complete', 'complete'])
+  }, 20_000)
+
   it('still refuses pasted inline attachments, and says why', async () => {
     const s = await server('text')
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl)
@@ -189,7 +199,9 @@ describe('provenance records (7.2)', () => {
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl, { contextWindow: 4096 })
     const file = await attach(f, 'summarised.txt', 'x')
     await say(f, p.id, `FIRST-TURN ${long(2000)}`, [file.reference.id])
-    for (let i = 0; i < 4; i++) await say(f, p.id, `${i}:${long(2000)}`)
+    // Stay under the point where Pi compacts by itself (a fifth turn crosses it in a 4096 window), so the manual compaction has something to do.
+    for (let i = 0; i < 3; i++) await say(f, p.id, `${i}:${long(2000)}`)
+    expect((await entriesOf(f)).some(entry => entry.type === 'compaction')).toBe(false)
     await f.chat.compact({ conversationId: f.id, profileId: p.id })
     expect((await entriesOf(f)).some(entry => entry.type === 'compaction')).toBe(true)
     await f.files!.revoke(file.grant.id)

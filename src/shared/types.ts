@@ -295,7 +295,7 @@ export interface SendMessageResult {
 }
 
 /** Why a conversation's queue is not running on by itself. */
-export type QueuePauseReason = 'stopped' | 'failed' | 'limit' | 'source-revoked' | 'unknown-action' | 'compaction-stopped' | 'compaction-failed' | 'restart'
+export type QueuePauseReason = 'stopped' | 'failed' | 'limit' | 'source-revoked' | 'service-changed' | 'unknown-action' | 'compaction-stopped' | 'compaction-failed' | 'restart'
 
 export interface QueuedInput {
   requestId: string

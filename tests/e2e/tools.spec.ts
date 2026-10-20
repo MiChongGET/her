@@ -15,7 +15,7 @@ async function launch(directory: string) {
 }
 async function profile(page: Page, url: string, protocol: 'openai' | 'anthropic' | 'openai-responses') {
   await page.evaluate(async ({ url, protocol }) => {
-    const saved = await window.her.saveProfile({ name: '合成验收', protocol, baseUrl: url, model: 'fixture-vision', models: [{ id: 'fixture-vision', multimodal: true }] })
+    const saved = await window.her.saveProfile({ name: '合成验收', protocol, authMethod: 'none', baseUrl: url, model: 'fixture-vision', models: [{ id: 'fixture-vision', multimodal: true }] })
     await window.her.selectProfile(saved.id)
   }, { url, protocol })
   await page.reload()
@@ -103,7 +103,7 @@ for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
         expect(await page.evaluate(() => window.her.listTrashedConversations())).toEqual([])
         const remaining = await app.evaluate(async (_electron, { directory, imageIds }) => {
           const fs = process.getBuiltinModule('node:fs'), path = process.getBuiltinModule('node:path')
-          return imageIds.filter(id => fs.existsSync(path.join(directory, 'tool-artifacts', id)))
+          return imageIds.filter(id => fs.existsSync(path.join(directory, 'Her-Pi-v1', 'artifacts', id)))
         }, { directory, imageIds })
         expect(remaining).toEqual([])
       }

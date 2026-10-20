@@ -6,7 +6,7 @@ import App from '../src/renderer/src/App'
 import type { BootstrapState, ChatEvent, ChatMessage, ConnectionTestResult, DesktopSettings, HerApi, ProviderProfile, SaveProfileInput, SendMessageInput, SendMessageResult, TestKind, TrashedConversation } from '../src/shared/types'
 
 const profile: ProviderProfile = {
-  id: 'provider-1', name: '我的模型', protocol: 'openai', baseUrl: 'https://example.com/proxy/v1', model: 'chat-model',
+  id: 'provider-1', name: '我的模型', protocol: 'openai', authMethod: 'api-key', baseUrl: 'https://example.com/proxy/v1', model: 'chat-model',
   hasApiKey: true, hasCustomHeaders: true,
   models: [{ id: 'chat-model', longOutput: false, multimodal: false, tests: { chat: { status: 'untested', message: '尚未测试' }, tools: { status: 'untested', message: '尚未测试' }, vision: { status: 'untested', message: '尚未测试' } } }]
 }

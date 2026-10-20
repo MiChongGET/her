@@ -116,7 +116,7 @@ export class ChatService {
 
   resumeQueue(conversationId: string): void {
     if (!this.host) throw new Error('会话运行时尚未初始化。')
-    this.host.resumeQueue(conversationId)
+    this.host.resumeQueue(conversationId, { onChat: this.onChat, onRequest: this.onRequest, systemPrompt: this.store.getSettings().systemPrompt || SYSTEM })
   }
 
   async compact(input: { conversationId: string; profileId: string; model?: string }): Promise<void> {

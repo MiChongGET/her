@@ -147,25 +147,10 @@ it.each([false, true])('shutdown drains admitted writes with the aggregate deadl
   pause.release(); vi.useRealTimers()
   await quit; expect(await operation).toBe('cancelled'); await f.artifacts.shutdown()
   expect(close).toHaveBeenCalledOnce(); calls.forEach(call => expect(call).not.toHaveBeenCalled())
-  expect(fs.existsSync(join(f.root, 'tool-artifacts', owner.id))).toBe(pastDeadline)
+  expect(fs.existsSync(join(f.root, 'artifacts', owner.id))).toBe(pastDeadline)
   vi.restoreAllMocks()
   const reopened = new HerStore(f.path)
   expect(reopened.listArtifactOwners(f.conversationId)).toEqual([]); reopened.close()
-})
-
-// Pre-Pi schema: messages lived in a SQLite table the host wrote directly. Pi's session file is now the
-// sole authority for message history, so there is no addMessage() to migrate through; the v11 artifact_owners
-// backfill itself is unaffected and still covered by the EACCES/rollback/reopen cases above.
-it.skip('schema11 published images migrate without changing history or readable references', async () => {
-  const f = setup()
-  const reference = await f.artifacts.put(new Uint8Array([4]), { conversationId: f.conversationId }, 'image/png')
-  f.store.addMessage({ id: 'm', conversationId: f.conversationId, role: 'assistant', content: 'image', status: 'complete', createdAt: '2026-10-15', toolCalls: [{ id: 'c', name: 'image', arguments: {}, result: { content: [{ type: 'image', artifactId: reference.id, mimeType: 'image/png' }] } }] })
-  const history = f.store.getMessages(f.conversationId)
-  const db = new DatabaseSync(f.path); db.exec('DROP TABLE IF EXISTS artifact_owners; PRAGMA user_version=11'); db.close()
-  f.reopen()
-  expect(f.store.listArtifactOwners(f.conversationId)).toEqual([{ id: reference.id, published: 1 }])
-  expect(f.store.getMessages(f.conversationId)).toEqual(history)
-  expect(await new ToolArtifactStore(f.store).read(reference.id, f.context)).toEqual(new Uint8Array([4]))
 })
 
 it('rejects traversal ownership without removing a neighboring original', async () => {
