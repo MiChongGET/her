@@ -151,6 +151,8 @@ export function createPeekabooAdapter(manager: McpConnectionManager, serviceId: 
       return { effect, target: targetOf(current) + (name === 'menu' && args.action === 'list' ? ':menu' : ''), displayTarget: current.display, observationId: current.id,
         summary: `${current.display} · ${name} ${JSON.stringify(args)}` }
     },
+    // Reads capture a window without focus or input; everything else drives the shared keyboard, mouse and focus.
+    resources: (_name, _args, assessment) => assessment.effect === 'read' ? [] : ['desktop'],
     validateObservation: (assessment, context) => !!observation && observation.id === assessment.observationId && observation.runId === context.runId && observation.conversationId === context.conversationId && observation.revision === revision(),
     async execute(name, args, context, dispatch) {
       context.signal.throwIfAborted(); validate(name, args)

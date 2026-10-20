@@ -1,0 +1,136 @@
+{
+  "observedAt": "2026-10-19T01:12:56.168Z",
+  "work": "her-pi130-electron-eE2ccz",
+  "runs": [
+    {
+      "label": "built",
+      "success": true
+    },
+    {
+      "label": "packaged",
+      "success": true
+    }
+  ],
+  "built": {
+    "observedAt": "2026-10-19T01:12:59.494Z",
+    "versions": {
+      "node": "24.21.0",
+      "acorn": "8.18.0",
+      "ada": "4.0.0",
+      "amaro": "1.1.11",
+      "ares": "1.34.8",
+      "brotli": "1.2.0",
+      "cldr": "48.0",
+      "icu": "78.2",
+      "llhttp": "9.4.3",
+      "merve": "1.2.2",
+      "modules": "149",
+      "napi": "10",
+      "nbytes": "0.1.4",
+      "ncrypto": "0.0.1",
+      "nghttp2": "1.70.0",
+      "nghttp3": "",
+      "ngtcp2": "",
+      "openssl": "0.0.0",
+      "simdjson": "4.6.7",
+      "simdutf": "7.7.0",
+      "sqlite": "3.53.4",
+      "tz": "2026d",
+      "undici": "7.29.1",
+      "unicode": "17.0",
+      "uv": "1.52.1",
+      "uvwasi": "0.0.23",
+      "v8": "15.2.124.28-electron.0",
+      "zlib": "1.3.2.1-motley",
+      "zstd": "1.6.0",
+      "electron": "44.7.0",
+      "chrome": "152.0.7977.130"
+    },
+    "processType": "browser",
+    "isPackaged": false,
+    "appPath": "her-pi130-electron-eE2ccz/app",
+    "activeTools": [
+      "her_echo"
+    ],
+    "toolCalls": [
+      {
+        "text": "茶"
+      }
+    ],
+    "text": "你好🌙",
+    "requests": 2,
+    "sessionFile": "her-pi130-electron-eE2ccz/userdata-built/Her-Pi-v1/pi/sessions/2026-10-19T01-12-59-563Z_01a151b8-0fab-756f-8be8-5c1b62bc755f.jsonl",
+    "resized": {
+      "width": 16,
+      "height": 16,
+      "wasResized": true,
+      "mimeType": "image/png"
+    },
+    "photonLoaded": true,
+    "resolvedPi": "her-pi130-electron-eE2ccz/app/node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+    "success": true,
+    "exitCode": 0
+  },
+  "packagedApp": "her-pi130-electron-eE2ccz/release/HerPiProbe-darwin-arm64/HerPiProbe.app",
+  "packaged": {
+    "observedAt": "2026-10-19T01:13:11.274Z",
+    "versions": {
+      "node": "24.21.0",
+      "acorn": "8.18.0",
+      "ada": "4.0.0",
+      "amaro": "1.1.11",
+      "ares": "1.34.8",
+      "brotli": "1.2.0",
+      "cldr": "48.0",
+      "icu": "78.2",
+      "llhttp": "9.4.3",
+      "merve": "1.2.2",
+      "modules": "149",
+      "napi": "10",
+      "nbytes": "0.1.4",
+      "ncrypto": "0.0.1",
+      "nghttp2": "1.70.0",
+      "nghttp3": "",
+      "ngtcp2": "",
+      "openssl": "0.0.0",
+      "simdjson": "4.6.7",
+      "simdutf": "7.7.0",
+      "sqlite": "3.53.4",
+      "tz": "2026d",
+      "undici": "7.29.1",
+      "unicode": "17.0",
+      "uv": "1.52.1",
+      "uvwasi": "0.0.23",
+      "v8": "15.2.124.28-electron.0",
+      "zlib": "1.3.2.1-motley",
+      "zstd": "1.6.0",
+      "electron": "44.7.0",
+      "chrome": "152.0.7977.130"
+    },
+    "processType": "browser",
+    "isPackaged": true,
+    "appPath": "her-pi130-electron-eE2ccz/release/HerPiProbe-darwin-arm64/HerPiProbe.app/Contents/Resources/app",
+    "activeTools": [
+      "her_echo"
+    ],
+    "toolCalls": [
+      {
+        "text": "茶"
+      }
+    ],
+    "text": "你好🌙",
+    "requests": 2,
+    "sessionFile": "her-pi130-electron-eE2ccz/userdata-packaged/Her-Pi-v1/pi/sessions/2026-10-19T01-13-11-350Z_01a151b8-3db5-7524-8440-ce2397f1822f.jsonl",
+    "resized": {
+      "width": 16,
+      "height": 16,
+      "wasResized": true,
+      "mimeType": "image/png"
+    },
+    "photonLoaded": true,
+    "resolvedPi": "her-pi130-electron-eE2ccz/release/HerPiProbe-darwin-arm64/HerPiProbe.app/Contents/Resources/app/node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+    "success": true,
+    "exitCode": 0
+  },
+  "success": true
+}

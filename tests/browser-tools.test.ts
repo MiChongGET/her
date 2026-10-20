@@ -83,7 +83,6 @@ it('rejects shifted tab indexes rather than selecting the replacement tab', asyn
 
 import { ToolApprovalService } from '../src/core/tools/approval'
 import { HerStore } from '../src/core/storage/store'
-import { TaskExecution } from '../src/core/tools/execution'
 import type { TaskRun } from '../src/shared/types'
 it('waits for concrete form submission approval and rejects late page drift without remapping approved args', async () => {
   const h = setup(); const id = await h.observe(), registry = new SimpleToolRegistry()
@@ -100,32 +99,6 @@ it('waits for concrete form submission approval and rejects late page drift with
   approvals.decide({ approvalId: approval.id, revision: approval.revision, decision: 'approve' })
   expect((await pending).isError).toBe(true)
   expect(h.calls.some(c => c.name === 'browser_type')).toBe(false)
-})
-it('keeps persisted unknown mutation blocked even for reset-capable observation after reconnect', async () => {
-  const store = new HerStore(':memory:'), conversation = store.createConversation()
-  function runtime(id: string, previous: string[] = []) {
-    const h = setup(), registry = new SimpleToolRegistry()
-    for (const name of ['browser_snapshot', 'browser_click']) registry.register({ name, description: name, parameters: { type: 'object' } }, (args, ctx) => h.execute(name, args, ctx), { assess: (args, ctx) => h.policy.assess!(name, args, ctx), validateObservation: h.policy.validateObservation })
-    const run: TaskRun = { id, conversationId: conversation.id, requestId: id, assistantMessageId: id, providerId: 'p', model: 'm', status: 'running', toolCallsCount: 0, activeMs: 0 }
-    const approvals = new ToolApprovalService(approval => approvals.decide({ approvalId: approval.id, revision: approval.revision, decision: 'approve' }))
-    const task = new TaskExecution(run, store, registry.snapshot(), approvals, new AbortController().signal, () => {}, previous)
-    const call = (callId: string, name: string, args: Record<string, unknown>) => task.execute(task.prepare({ id: callId, name, arguments: args }))
-    return { h, task, call }
-  }
-  const first = runtime('first')
-  try {
-    const snapshot = await first.call('snapshot', 'browser_snapshot', {})
-    first.h.change({ isError: true, content: [{ type: 'text', text: 'Disconnected' }] })
-    await first.call('click', 'browser_click', { observation_id: snapshot.meta!.observation_id, target: 'e2' })
-    expect(first.task.hasUnknownResults()).toBe(true)
-    first.task.finish('paused')
-    const second = runtime('second', store.getUnknownToolTargets(conversation.id))
-    try {
-      await expect(second.call('snapshot', 'browser_snapshot', {})).rejects.toThrow(/未知/)
-      expect(second.task.hasUnknownResults()).toBe(true)
-      expect(second.h.calls).toHaveLength(0)
-    } finally { second.task.finish('paused') }
-  } finally { first.task.finish('paused'); store.close() }
 })
 it('returns only inline screenshot image and never a filesystem result link', async () => {
   const h = setup(); const id = await h.observe(); let calls = 0

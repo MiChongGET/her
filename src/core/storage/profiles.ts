@@ -15,10 +15,25 @@ const MAX_MODELS = 20
 type ValidatedInput = Omit<SaveProfileInput, 'models'> & { models: { id: string; longOutput: boolean; multimodal: boolean }[] }
 
 function publicProfile(profile: StoredProfile): ProviderProfile {
+  const models = profile.models.map(model => {
+    const tests = { ...model.tests }
+    for (const kind of ['chat', 'tools', 'vision'] as const) {
+      if (tests[kind].status === 'passed' && tests[kind].message.startsWith('配置验证通过')) {
+        tests[kind] = { status: 'untested', message: '旧结果只验证了配置，请重新测试模型能力。' }
+      }
+    }
+    return { ...model, tests }
+  })
   return {
-    id: profile.id, name: profile.name, protocol: profile.protocol,
-    baseUrl: profile.baseUrl, model: profile.model, models: profile.models,
-    hasApiKey: profile.hasApiKey, hasCustomHeaders: profile.hasCustomHeaders,
+    id: profile.id,
+    name: profile.name,
+    protocol: profile.protocol,
+    baseUrl: profile.baseUrl,
+    model: profile.defaultModel,
+    models,
+    authMethod: profile.authMethod,
+    hasApiKey: profile.hasApiKey,
+    hasCustomHeaders: profile.hasCustomHeaders,
     ...(profile.maxOutputTokens !== null ? { maxOutputTokens: profile.maxOutputTokens } : {})
   }
 }
@@ -45,6 +60,10 @@ function validate(input: SaveProfileInput): ValidatedInput {
   if (input.maxOutputTokens !== undefined && input.maxOutputTokens !== null &&
       (!Number.isInteger(input.maxOutputTokens) || input.maxOutputTokens < 1 || input.maxOutputTokens > LONG_OUTPUT_TOKENS)) {
     throw new Error('最大输出 token 数应为 1 到 1000000 之间的整数。')
+  }
+  if (input.contextWindow !== undefined && input.contextWindow !== null &&
+      (!Number.isInteger(input.contextWindow) || input.contextWindow < 1024 || input.contextWindow > 10_000_000)) {
+    throw new Error('上下文窗口应为 1024 到 10000000 之间的整数。')
   }
   const rawModels = input.models ?? [{ id: input.model }]
   if (!Array.isArray(rawModels) || rawModels.length < 1 || rawModels.length > MAX_MODELS) {
@@ -116,9 +135,20 @@ export class ProfileService {
         tests: connectionChanged ? untestedConnections() : latest!.models.find(old => old.id === item.id)?.tests ?? untestedConnections()
       }))
       const profile: StoredProfile = {
-        id, name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, model: input.model,
-        sealedSecrets, hasApiKey, hasCustomHeaders, maxOutputTokens, models,
-        revision: (previous?.revision ?? 0) + Number(connectionChanged)
+        id,
+        name: input.name,
+        protocol: input.protocol,
+        baseUrl: input.baseUrl,
+        defaultModel: input.model,
+        authMethod: input.authMethod || 'api-key',
+        contextWindow: input.contextWindow ?? previous?.contextWindow ?? null,
+        sealedSecrets,
+        hasApiKey,
+        hasCustomHeaders,
+        maxOutputTokens,
+        models,
+        revision: (previous?.revision ?? 0) + Number(connectionChanged),
+        tests: untestedConnections()
       }
       this.store.saveProfile(profile)
       return publicProfile(profile)
@@ -128,7 +158,7 @@ export class ProfileService {
   async resolve(id: string, model?: string): Promise<RuntimeProvider> {
     this.lifetime?.throwIfAborted()
     const profile = this.requireProfile(id)
-    const entry = profile.models.find(item => item.id === (model ?? profile.model))
+    const entry = profile.models.find(item => item.id === (model ?? profile.defaultModel))
     if (!entry) throw new Error('该服务没有这个模型，请重新选择。')
     const secrets = await this.readSecrets(profile)
     this.lifetime?.throwIfAborted()
@@ -136,13 +166,20 @@ export class ProfileService {
     return {
       id: profile.id, name: profile.name, protocol: profile.protocol,
       baseUrl: profile.baseUrl, model: entry.id, multimodal: entry.multimodal, ...secrets,
-      ...(maxOutputTokens !== null ? { maxOutputTokens } : {})
+      ...(maxOutputTokens !== null ? { maxOutputTokens } : {}),
+      ...(profile.contextWindow !== null ? { contextWindow: profile.contextWindow } : {})
     }
   }
 
   select(id: string): void {
     this.requireProfile(id)
-    this.store.setSettings({ ...this.store.getSettings(), activeProfileId: id })
+    const settings = this.store.getSettings() || {
+      activeProfileId: null,
+      shortcut: '',
+      stopShortcut: '',
+      launchAtLogin: false
+    }
+    this.store.setSettings({ ...settings, activeProfileId: id })
   }
 
   delete(id: string): void {
@@ -156,7 +193,7 @@ export class ProfileService {
     if (this.lifetime?.aborted) return false
     const profile = this.store.getProfile(id)
     if (!profile || (expectedRevision !== undefined && profile.revision !== expectedRevision)) return false
-    const target = model ?? profile.model
+    const target = model ?? profile.defaultModel
     if (!profile.models.some(item => item.id === target)) return false
     this.store.saveProfile({
       ...profile,

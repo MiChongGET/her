@@ -58,3 +58,50 @@ describe('bound tool approvals', () => {
     await pending
   })
 })
+
+describe('approval binds one exact call', () => {
+  async function gated() {
+    const { SimpleToolRegistry } = await import('../src/core/tools/registry')
+    const registry = new SimpleToolRegistry()
+    const dispatched: unknown[] = []
+    registry.register({ name: 'act', description: 'act', parameters: { type: 'object', properties: { target: { type: 'string' } }, required: ['target'], additionalProperties: false } },
+      async args => { dispatched.push(args); return { content: [{ type: 'text', text: 'ok' }] } },
+      { assess: async args => ({ effect: 'send', target: String(args.target), summary: `send ${args.target}` }) })
+    const requests: ApprovalRequest[] = []
+    const approvals = new ToolApprovalService(request => requests.push(request))
+    const controller = new AbortController()
+    const call = (callId: string, runId: string, target: string) => registry.snapshot().execute('act', { target }, {
+      runId, conversationId: 'c', callId, signal: controller.signal, authorize: (assessment, context) => approvals.authorize(callId, assessment, context) })
+    const settled = (promise: Promise<unknown>) => Promise.race([promise.then(() => true, () => true), new Promise<boolean>(resolve => setTimeout(() => resolve(false), 30))])
+    return { dispatched, requests, approvals, call, settled }
+  }
+
+  it('approving call A does not release call B', async () => {
+    const s = await gated()
+    const a = s.call('a', 'run', 'alice'), b = s.call('b', 'run', 'bob')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(s.requests.map(request => request.callId).sort()).toEqual(['a', 'b'])
+    const ra = s.requests.find(request => request.callId === 'a')!
+    s.approvals.decide({ approvalId: ra.id, revision: ra.revision, decision: 'approve' })
+    await a
+    expect(await s.settled(b)).toBe(false)
+    expect(s.dispatched).toEqual([{ target: 'alice' }])
+  })
+
+  it('same call and args in a different run, or a different target, get different revisions', async () => {
+    const s = await gated()
+    void s.call('a', 'run-1', 'alice'); void s.call('a', 'run-2', 'alice'); void s.call('a', 'run-1', 'bob')
+    await new Promise(resolve => setImmediate(resolve))
+    expect(new Set(s.requests.map(request => request.revision)).size).toBe(3)
+  })
+
+  it("a decision carrying another call's revision releases nothing", async () => {
+    const s = await gated()
+    const a = s.call('a', 'run', 'alice'); void s.call('b', 'run', 'bob')
+    await new Promise(resolve => setImmediate(resolve))
+    const [ra, rb] = [s.requests.find(r => r.callId === 'a')!, s.requests.find(r => r.callId === 'b')!]
+    s.approvals.decide({ approvalId: ra.id, revision: rb.revision, decision: 'approve' })
+    expect(await s.settled(a)).toBe(false)
+    expect(s.dispatched).toEqual([])
+  })
+})

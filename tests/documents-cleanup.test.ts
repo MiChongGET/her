@@ -15,7 +15,7 @@ async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'her-doc-cleanup-')); cleanup.push(() => rmSync(root, { recursive: true, force: true }))
   const path = join(root, 'store.sqlite'); let store = new HerStore(path); let closed = false
   cleanup.push(() => { if (!closed) store.close() })
-  const context = { conversationId: store.createConversation().id, runId: 'r', callId: 'c', signal: new AbortController().signal }
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'r', callId: 'c', signal: new AbortController().signal }
   const original = join(root, 'original.docx'); await writeFile(original, 'original bytes')
   const lifetime = new AbortController(); const files = new FileAccessService(store, lifetime.signal)
   const [grant] = await files.grant([original], { scope: 'conversation', kind: 'file', conversationId: context.conversationId })
@@ -30,7 +30,7 @@ it('recovers staged originals and unpublished text after reopen; purge preserves
   const staged = await f.cache.stage(id, Buffer.from('staged original'), '.docx')
   await f.cache.write(id, 'unpublished text')
   expect(await readFile(staged, 'utf8')).toBe('staged original')
-  const other = f.store.createConversation().id, otherId = randomUUID()
+  const other = (() => { const id = randomUUID(); f.store.createConversation(id, randomUUID(), 't'); return id })(), otherId = randomUUID()
   f.store.beginDocumentFiles(otherId, other)
   await f.cache.write(otherId, 'other owned text')
   // Simulate an already published cache without affecting this interrupted owner's state.
@@ -111,7 +111,8 @@ it('purge retains unfinished ownership when an admitted staging write completes 
 })
 
 import { DatabaseSync } from 'node:sqlite'
-it('migrates published v10 cache ownership without deleting readable text', async () => {
+// Her-Pi v1 is schema version 1 only (checked in HerStore's constructor); pre-Pi numeric migrations (v0-v12) do not apply.
+it.skip('migrates published v10 cache ownership without deleting readable text', async () => {
   const f = await setup()
   const service = new DocumentService(f.store, f.files, () => ({ version: 'test', configuration: '1', validate: () => {}, convert: async () => 'published text' }))
   const reference = await service.extract(f.file.id, f.context)

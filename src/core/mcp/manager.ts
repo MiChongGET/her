@@ -10,6 +10,8 @@ import { synchronousJsonSchemaValidator } from '../tools/schema'
 import type { ToolDefinition, ToolExecutionContext } from '../tools/types'
 import { McpConfigService, type RuntimeMcpConfig } from './config'
 import { McpRegistryAdapter, type McpServicePolicy } from './registry-adapter'
+import { SCOPED_PRESETS } from './presets'
+import { abortable } from '../tools/abort'
 
 // Four maximum-sized images plus JSON overhead; still bounded before parsing.
 const MAX_WIRE_BYTES = 64 * 1024 * 1024
@@ -17,7 +19,11 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const failure = (text: string): ToolResult => ({ isError: true, content: [{ type: 'text', text }] })
 
 interface Connection {
+  /** serviceId, or serviceId::conversationId for a scoped service. */
+  key: string
   serviceId: string
+  conversationId?: string
+  registry: SimpleToolRegistry
   revision: number
   controller: AbortController
   adapter: McpRegistryAdapter
@@ -32,6 +38,8 @@ interface Connection {
   generation: number
   catalog?: string
   stderr: string
+  /** Requests cancelled or timed out whose late responses the SDK will report as unknown IDs. */
+  abandoned: number
   closing?: Promise<void>
   failureMessage?: string
 }
@@ -82,7 +90,8 @@ export class McpConnectionManager {
 
   constructor(private readonly configs: McpConfigService, private readonly registry: SimpleToolRegistry,
     private readonly artifacts: ToolArtifactStore,
-    private readonly policyFor: (config: RuntimeMcpConfig) => McpServicePolicy | Promise<McpServicePolicy> = () => ({})) {
+    private readonly policyFor: (config: RuntimeMcpConfig) => McpServicePolicy | Promise<McpServicePolicy> = () => ({}),
+    private readonly isScoped: (config: { presetId?: string }) => boolean = config => !!config.presetId && SCOPED_PRESETS.has(config.presetId)) {
     this.unsubscribe = configs.subscribe(change => {
       this.invalidate(change.serviceId)
       this.statuses.set(change.serviceId, { serviceId: change.serviceId, revision: change.revision, state: 'disconnected', toolCount: 0 })
@@ -93,22 +102,51 @@ export class McpConnectionManager {
     return { ...(this.statuses.get(serviceId) ?? { serviceId, revision: this.configs.list().find(c => c.id === serviceId)?.revision ?? 0, state: 'disconnected', toolCount: 0 }) }
   }
 
-  connect(serviceId: string): Promise<void> {
+  /** A scoped service has one connection per conversation; calls without a conversation share the plain one. */
+  private keyFor(serviceId: string, conversationId?: string): { key: string; scoped: boolean } {
+    const config = this.configs.list().find(c => c.id === serviceId)
+    return config && conversationId && this.isScoped(config) ? { key: `${serviceId}::${conversationId}`, scoped: true } : { key: serviceId, scoped: false }
+  }
+
+  /**
+   * Connects every enabled service for this conversation and returns the registries holding its MCP tools:
+   * the shared one plus the private registry of each scoped connection. A service that fails to connect is
+   * skipped, so one broken server never blocks the conversation.
+   */
+  async prepare(conversationId: string, signal: AbortSignal): Promise<SimpleToolRegistry[]> {
+    signal.throwIfAborted()
+    const enabled = this.configs.list().filter(config => config.enabled)
+    await abortable(Promise.allSettled(enabled.map(config => this.connect(config.id, conversationId))), signal)
+    const scoped = enabled.flatMap(config => {
+      const connection = this.connections.get(this.keyFor(config.id, conversationId).key)
+      return connection && connection.registry !== this.registry && this.current(connection) && connection.discovered ? [connection.registry] : []
+    })
+    return [this.registry, ...scoped]
+  }
+
+  /** Tool registry for this service in this conversation; scoped connections keep their tools private. */
+  registryFor(serviceId: string, conversationId?: string): SimpleToolRegistry {
+    return this.connections.get(this.keyFor(serviceId, conversationId).key)?.registry ?? this.registry
+  }
+
+  connect(serviceId: string, conversationId?: string): Promise<void> {
     if (this.stopped) return Promise.reject(new Error('MCP 管理器已关闭。'))
-    const existing = this.connections.get(serviceId)
+    const { key, scoped } = this.keyFor(serviceId, conversationId)
+    const existing = this.connections.get(key)
     if (existing) return existing.opening ?? this.discover(existing)
     const config = this.configs.list().find(c => c.id === serviceId)
     if (!config?.enabled) return Promise.reject(new Error('MCP 服务不存在或已停用。'))
-    const connection: Connection = { serviceId, revision: config.revision, controller: new AbortController(), adapter: new McpRegistryAdapter(this.registry, config.name), policy: {}, discovered: false, generation: 0, stderr: '' }
-    this.connections.set(serviceId, connection)
+    const registry = scoped ? new SimpleToolRegistry() : this.registry
+    const connection: Connection = { key, serviceId, ...(scoped ? { conversationId } : {}), registry, revision: config.revision, controller: new AbortController(), adapter: new McpRegistryAdapter(registry, config.name), policy: {}, discovered: false, generation: 0, stderr: '', abandoned: 0 }
+    this.connections.set(key, connection)
     this.statuses.set(serviceId, { serviceId, revision: config.revision, state: 'connecting', toolCount: 0 })
     connection.opening = this.open(connection).finally(() => { connection.opening = undefined })
     return connection.opening
   }
 
-  async listTools(serviceId: string): Promise<ToolDefinition[]> {
-    await this.connect(serviceId)
-    const connection = this.connections.get(serviceId)
+  async listTools(serviceId: string, conversationId?: string): Promise<ToolDefinition[]> {
+    await this.connect(serviceId, conversationId)
+    const connection = this.connections.get(this.keyFor(serviceId, conversationId).key)
     if (!connection || !this.current(connection)) throw new Error('MCP 配置已失效。')
     await this.discover(connection)
     return connection.adapter.definitions()
@@ -116,18 +154,18 @@ export class McpConnectionManager {
 
   async call(serviceId: string, toolName: string, args: Record<string, unknown>, context: ToolExecutionContext): Promise<ToolResult> {
     context.signal.throwIfAborted()
-    const connection = this.connections.get(serviceId)
+    const connection = this.connections.get(this.keyFor(serviceId, context.conversationId).key)
     const name = connection?.adapter.name(toolName)
     if (!connection || !this.current(connection) || !connection.discovered || !name || !this.allowed(connection, toolName)) throw new Error('MCP 工具未连接、已失效或不在允许清单中。')
     // Public calls and advertised tools enter the exact same Host schema/approval gate.
-    return this.registry.execute(name, args, context)
+    return connection.registry.execute(name, args, context)
   }
 
   /** Main-only seam for the authorized document wrapper; never registered or exposed via IPC. */
   async convertDocument(serviceId: string, uri: string, context: ToolExecutionContext): Promise<string> {
     context.signal.throwIfAborted()
-    await this.connect(serviceId)
-    const connection = this.connections.get(serviceId)!
+    await this.connect(serviceId, context.conversationId)
+    const connection = this.connections.get(this.keyFor(serviceId, context.conversationId).key)!
     const generation = connection.generation
     const valid = () => {
       context.signal.throwIfAborted(); this.assertCurrent(connection)
@@ -155,10 +193,16 @@ export class McpConnectionManager {
     }
   }
 
+  /** Releases every scoped connection this conversation holds, across all services; shared connections are untouched. */
+  async disconnectConversation(conversationId: string): Promise<void> {
+    const targets = [...this.connections.values()].filter(connection => connection.conversationId === conversationId)
+    await Promise.all(targets.map(connection => this.close(this.invalidateConnection(connection))))
+  }
+
   async disconnect(serviceId: string): Promise<void> {
-    const connection = this.invalidate(serviceId)
+    const closed = this.invalidate(serviceId)
     this.statuses.set(serviceId, { serviceId, revision: this.configs.list().find(c => c.id === serviceId)?.revision ?? this.getStatus(serviceId).revision, state: 'disconnected', toolCount: 0 })
-    if (connection) await this.close(connection)
+    await Promise.all(closed.map(connection => this.close(connection)))
   }
 
   getOwnedProcesses(): { serviceId: string; pid: number }[] {
@@ -177,23 +221,26 @@ export class McpConnectionManager {
   async shutdown(): Promise<void> {
     this.stopped = true
     this.unsubscribe()
-    await Promise.all([...this.connections.keys()].map(id => this.disconnect(id)))
+    await Promise.all([...new Set([...this.connections.values()].map(c => c.serviceId))].map(id => this.disconnect(id)))
     await Promise.all([...this.cleanups])
   }
 
   private current(connection: Connection): boolean {
-    return !connection.controller.signal.aborted && this.connections.get(connection.serviceId) === connection && this.configs.isCurrent(connection.serviceId, connection.revision)
+    return !connection.controller.signal.aborted && this.connections.get(connection.key) === connection && this.configs.isCurrent(connection.serviceId, connection.revision)
   }
   private allowed(connection: Connection, toolName: string): boolean { return !connection.policy.allowedTools || connection.policy.allowedTools.includes(toolName) }
   private assertCurrent(connection: Connection): void { if (!this.current(connection)) throw new Error('MCP 配置或工具清单已失效。') }
 
-  private invalidate(serviceId: string): Connection | undefined {
-    const connection = this.connections.get(serviceId)
-    if (!connection) return undefined
+  /** Drops every connection of a service, e.g. when its configuration changes. */
+  private invalidate(serviceId: string): Connection[] {
+    return [...this.connections.values()].filter(c => c.serviceId === serviceId).map(c => this.invalidateConnection(c))
+  }
+
+  private invalidateConnection(connection: Connection): Connection {
     connection.adapter.clear()
     connection.discovered = false
     connection.controller.abort(new Error('MCP 连接已失效。'))
-    this.connections.delete(serviceId)
+    this.connections.delete(connection.key)
     void this.close(connection)
     return connection
   }
@@ -212,10 +259,10 @@ export class McpConnectionManager {
   }
 
   private fail(connection: Connection, error: unknown): void {
-    if (this.connections.get(connection.serviceId) !== connection) return
+    if (this.connections.get(connection.key) !== connection) return
     const message = diagnostic(error)
     connection.failureMessage = message
-    this.invalidate(connection.serviceId)
+    this.invalidateConnection(connection)
     this.statuses.set(connection.serviceId, { serviceId: connection.serviceId, revision: connection.revision, state: 'error', toolCount: 0, message: message + (connection.stderr ? '\n' + connection.stderr : '') })
   }
 
@@ -256,7 +303,11 @@ export class McpConnectionManager {
       connection.transport = transport
       this.owned.add(connection)
       if (transport instanceof StrictStdioTransport) this.captureStderr(connection, transport)
-      client.onerror = error => this.fail(connection, error)
+      client.onerror = error => {
+        // A server may still answer a request we cancelled; that is not a protocol failure, but an unexplained unknown ID is.
+        if (connection.abandoned > 0 && error instanceof Error && error.message.startsWith('Received a response for an unknown message ID')) { connection.abandoned--; return }
+        this.fail(connection, error)
+      }
       client.onclose = () => this.fail(connection, new Error('MCP disconnected'))
       client.setNotificationHandler('notifications/tools/list_changed', () => {
         if (!this.current(connection)) return
@@ -325,7 +376,14 @@ export class McpConnectionManager {
       await revalidate()
       if (!this.allowed(connection, name)) throw new Error('MCP 工具不在允许清单中。')
       if (connection.policy.deferDispatch) context.markDispatched?.(phase)
-      const result = await connection.client!.callTool({ name, arguments: arguments_ }, { signal: AbortSignal.any([context.signal, connection.controller.signal]), timeout: connection.policy.timeoutMs ?? 60_000, maxTotalTimeout: connection.policy.timeoutMs ?? 60_000 })
+      let result: CallToolResult
+      try {
+        result = await connection.client!.callTool({ name, arguments: arguments_ }, { signal: AbortSignal.any([context.signal, connection.controller.signal]), timeout: connection.policy.timeoutMs ?? 60_000, maxTotalTimeout: connection.policy.timeoutMs ?? 60_000 }) as CallToolResult
+      } catch (error) {
+        // Stopping one call must not disconnect: only the request is abandoned, the connection stays open.
+        if (this.current(connection)) connection.abandoned++
+        throw error
+      }
       await revalidate()
       const converted = await this.convert(result, context, valid)
       await revalidate()

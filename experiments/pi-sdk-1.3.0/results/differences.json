@@ -1,0 +1,730 @@
+[
+  {
+    "protocol": "openai",
+    "scenario": "tool",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "bad-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "partial-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "mixed-invalid",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "missing-terminal",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "missing-finish",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "Stream ended without finish_reason",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "truncated-tool",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "length",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "invalid-content-type",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "final-only-tool",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "queued-status",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "missing-status",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "missing-start",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "missing-block-stop",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "redirect",
+    "requests": 2,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "text",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "openai",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "openai",
+    "scenario": "http-error",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "401: {\"message\":\"fixture unauthorized synthetic_secret_marker\"}",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai",
+    "scenario": "hang",
+    "requests": 1,
+    "path": "/proxy/v1/chat/completions",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "aborted",
+    "firstError": "Request was aborted",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "tool",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "bad-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "partial-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "mixed-invalid",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "missing-terminal",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "Anthropic stream ended before message_stop",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "missing-finish",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "Anthropic stream ended without a stop reason",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "truncated-tool",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "length",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "invalid-content-type",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "final-only-tool",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "queued-status",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "missing-status",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "missing-start",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "missing-block-stop",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "redirect",
+    "requests": 2,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "text",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "http-error",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "401 {\"error\":{\"message\":\"fixture unauthorized synthetic_secret_marker\"}}",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "anthropic",
+    "scenario": "hang",
+    "requests": 1,
+    "path": "/proxy/v1/v1/messages",
+    "auth": "fixture-key",
+    "customHeader": null,
+    "firstStopReason": "aborted",
+    "firstError": "This operation was aborted",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "tool",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "bad-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "partial-json-tool",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "mixed-invalid",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "missing-terminal",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "OpenAI Responses stream ended before a terminal response event",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "missing-finish",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "truncated-tool",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "length",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "invalid-content-type",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "final-only-tool",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "queued-status",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "missing-status",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "missing-start",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "missing-block-stop",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "toolUse",
+    "firstError": null,
+    "toolCalls": [
+      {
+        "ok": true
+      }
+    ],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "redirect",
+    "requests": 2,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "text",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "stop",
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "text",
+    "requests": 0,
+    "path": null,
+    "auth": null,
+    "customHeader": null,
+    "firstStopReason": null,
+    "firstError": null,
+    "toolCalls": [],
+    "promptError": "No API key found for her-diff.\n\nUse /login to log into a provider via OAuth or API key. See:\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/providers.md\n  <repo>/node_modules/@earendil-works/pi-coding-agent/docs/models.md"
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "http-error",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "error",
+    "firstError": "her-diff API error (401): {\"message\":\"fixture unauthorized synthetic_secret_marker\"}",
+    "toolCalls": [],
+    "promptError": null
+  },
+  {
+    "protocol": "openai-responses",
+    "scenario": "hang",
+    "requests": 1,
+    "path": "/proxy/v1/responses",
+    "auth": "Bearer fixture-key",
+    "customHeader": null,
+    "firstStopReason": "aborted",
+    "firstError": "OpenAI Responses stream ended before a terminal response event",
+    "toolCalls": [],
+    "promptError": null
+  }
+]

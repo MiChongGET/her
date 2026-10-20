@@ -36,6 +36,7 @@ export default function SettingsPanel(props: Props) {
   const [defaultIndex, setDefaultIndex] = useState(defaultIndexOf(initialProfile))
   const [testModel, setTestModel] = useState('')
   const [maxOutputTokens, setMaxOutputTokens] = useState(initialProfile?.maxOutputTokens?.toString() ?? '')
+  const [contextWindow, setContextWindow] = useState(initialProfile?.contextWindow?.toString() ?? '')
   const [apiKey, setApiKey] = useState('')
   const [headers, setHeaders] = useState('')
   const [clearKey, setClearKey] = useState(false)
@@ -70,6 +71,7 @@ export default function SettingsPanel(props: Props) {
     setDefaultIndex(defaultIndexOf(profile))
     setTestModel('')
     setMaxOutputTokens(profile?.maxOutputTokens?.toString() ?? '')
+    setContextWindow(profile?.contextWindow?.toString() ?? '')
     setApiKey('')
     setHeaders('')
     setClearKey(false)
@@ -117,10 +119,19 @@ export default function SettingsPanel(props: Props) {
       } catch { if (advancedOptionsRef.current) advancedOptionsRef.current.open = true; setError('额外请求头必须是 JSON 对象，且每个值都是字符串。例如 {"X-Project": "my-project"}。'); return }
     }
     const models = modelRows.map((row) => ({ id: row.id.trim(), longOutput: row.longOutput, multimodal: row.multimodal }))
+    const authMethod = apiKey ? 'api-key' : customHeaders ? 'headers' : 'none'
     const input: SaveProfileInput = {
-      ...(editingId ? { id: editingId } : {}), name: name.trim(), protocol, baseUrl: baseUrl.trim(), model: models[defaultIndex]?.id ?? '', models,
-      ...(clearKey ? { apiKey: '' } : apiKey ? { apiKey } : {}), ...(customHeaders !== undefined ? { customHeaders } : {}),
-      ...(protocol === 'anthropic' ? { maxOutputTokens: maxOutputTokens.trim() === '' ? null : Number(maxOutputTokens) } : {})
+      ...(editingId ? { id: editingId } : {}),
+      name: name.trim(),
+      protocol,
+      baseUrl: baseUrl.trim(),
+      model: models[defaultIndex]?.id ?? '',
+      models,
+      authMethod,
+      ...(clearKey ? { apiKey: '' } : apiKey ? { apiKey } : {}),
+      ...(customHeaders !== undefined ? { customHeaders } : {}),
+      ...(protocol === 'anthropic' ? { maxOutputTokens: maxOutputTokens.trim() === '' ? null : Number(maxOutputTokens) } : {}),
+      ...(contextWindow.trim() === '' ? {} : { contextWindow: Number(contextWindow) })
     }
     setBusy(true)
     try {
@@ -205,17 +216,17 @@ export default function SettingsPanel(props: Props) {
       <div className={`settings-content${tab === 'models' ? ' model-settings-content' : tab === 'mcp' ? ' mcp-settings-content' : ''}`}>
         {error && <div className="error-banner" role="alert">{error}</div>}{notice && <div className="success-banner" role="status"><Icon name="check" />{notice}</div>}
         {tab === 'files' ? <FileAccessPanel persistent onRevoke={props.onRevokeFileGrant} /> : tab === 'mcp' ? <McpSettingsPanel /> : tab === 'models' ? <div className="model-settings">
-          <aside className="service-list" aria-label="已保存的服务"><div className="service-list-title"><span>我的服务</span><button className="icon-button" aria-label="新建模型服务" disabled={busy} onClick={() => { setEditingId(undefined); setName(''); setProtocol('openai'); setBaseUrl(''); resetModels(); setMaxOutputTokens(''); setApiKey(''); setHeaders(''); setClearKey(false); setClearHeaders(false); setNotice(''); setError(''); setConfirmDelete(false) }}><Icon name="plus" /></button></div>
+          <aside className="service-list" aria-label="已保存的服务"><div className="service-list-title"><span>我的服务</span><button className="icon-button" aria-label="新建模型服务" disabled={busy} onClick={() => { setEditingId(undefined); setName(''); setProtocol('openai'); setBaseUrl(''); resetModels(); setMaxOutputTokens(''); setContextWindow(''); setApiKey(''); setHeaders(''); setClearKey(false); setClearHeaders(false); setNotice(''); setError(''); setConfirmDelete(false) }}><Icon name="plus" /></button></div>
             {props.profiles.length === 0 && <p className="service-empty">添加你的第一个服务，<br />开始和 Her 聊天。</p>}
             {props.profiles.map((item) => <button key={item.id} className={`service-item ${item.id === editingId ? 'selected' : ''}`} aria-label={`编辑 ${item.name}`} disabled={busy} onClick={() => { setEditingId(item.id); setNotice(''); setError('') }}><span className="service-monogram">{item.protocol === 'anthropic' ? 'A' : item.protocol === 'openai-responses' ? 'R' : 'O'}</span><span><strong>{item.name}</strong><small>{item.model}</small></span>{props.settings.activeProfileId === item.id && <span className="service-active" aria-label="当前使用"><Icon name="check" /></span>}</button>)}
-            <button className="text-button add-service" disabled={busy} onClick={() => { setEditingId(undefined); setName(''); setProtocol('openai'); setBaseUrl(''); resetModels(); setMaxOutputTokens(''); setApiKey(''); setHeaders(''); setClearKey(false); setClearHeaders(false); setNotice(''); setError(''); setConfirmDelete(false) }}><Icon name="plus" />添加服务</button>
+            <button className="text-button add-service" disabled={busy} onClick={() => { setEditingId(undefined); setName(''); setProtocol('openai'); setBaseUrl(''); resetModels(); setMaxOutputTokens(''); setContextWindow(''); setApiKey(''); setHeaders(''); setClearKey(false); setClearHeaders(false); setNotice(''); setError(''); setConfirmDelete(false) }}><Icon name="plus" />添加服务</button>
           </aside>
 
           <div className="service-editor"><div className="service-editor-scroll"><div className="editor-heading"><div><h3>{profile ? '服务配置' : '添加模型服务'}</h3><p>选择熟悉的模型，用自己的连接方式。</p></div>{profile && <button className="text-button" disabled={busy || props.settings.activeProfileId === profile.id} onClick={() => { setError(''); void props.onSelectProfile(profile.id).then(() => { if (mounted.current) setNotice('已设为当前服务') }).catch((cause) => { if (mounted.current) setError(`切换失败：${messageOf(cause)}`) }) }}>{props.settings.activeProfileId === profile.id ? '当前服务' : '设为当前'}</button>}</div>
             <form id="profile-form" className="profile-form" onSubmit={(event) => void saveProfile(event)}>
               <div className="field-grid"><label className="field">服务名称<input required value={name} onChange={(event) => setName(event.target.value)} placeholder="比如：我的 Claude" /></label><label className="field">协议<select aria-label="协议" value={protocol} onChange={(event) => setProtocol(event.target.value as ProviderProtocol)}><option value="openai">OpenAI 兼容</option><option value="anthropic">Claude / Anthropic</option><option value="openai-responses">OpenAI Responses</option></select></label></div>
               <label className="field">Base URL<input aria-label="Base URL" required type="url" value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://example.com/proxy/v1" /><small>{protocol === 'anthropic' ? '填写包含路径前缀的基址，Her 会追加对应的接口路径。' : '填写包含路径前缀的基址（填到 /v1 即可），Her 会追加对应的接口路径。'}</small></label>
-              <div className="field"><label htmlFor="api-key">API Key</label><input id="api-key" type="password" autoComplete="new-password" value={apiKey} disabled={clearKey} onChange={(event) => setApiKey(event.target.value)} placeholder={profile?.hasApiKey ? '已保存 · 留空保留，输入新值替换' : '输入密钥（服务无需鉴权时可留空）'} /><small>密钥由系统保护，已保存的值不会回显。</small>{profile?.hasApiKey && <label className="checkbox-field"><input type="checkbox" checked={clearKey} onChange={(event) => { setClearKey(event.target.checked); setApiKey('') }} />清除已保存的密钥</label>}</div>
+              <div className="field"><label htmlFor="api-key">API Key</label><input id="api-key" type="password" autoComplete="new-password" value={apiKey} disabled={clearKey} onChange={(event) => setApiKey(event.target.value)} placeholder={profile?.hasApiKey ? '已保存 · 留空保留，输入新值替换' : '输入密钥（服务无需鉴权时可留空）'} /><small>密钥由系统保护，已保存的值不会回显。{profile && <> · 认证方式：{profile.authMethod === 'api-key' ? 'API Key' : profile.authMethod === 'headers' ? '额外请求头' : '无密钥'}</>}</small>{profile?.hasApiKey && <label className="checkbox-field"><input type="checkbox" checked={clearKey} onChange={(event) => { setClearKey(event.target.checked); setApiKey('') }} />清除已保存的密钥</label>}</div>
               <fieldset className="field model-list"><legend>模型</legend>
                 {modelRows.map((row, index) => <div className="model-row" key={index}>
                   <input type="radio" name="default-model" aria-label={`设为默认模型 ${index + 1}`} checked={defaultIndex === index} onChange={() => setDefaultIndex(index)} />
@@ -228,11 +239,12 @@ export default function SettingsPanel(props: Props) {
                 <small>选中的是默认模型，新对话默认使用它；勾选 1M 后该模型的单次输出上限为 1,000,000 token；勾选多模态后该模型支持图片、声音、视频、文件等输入。</small>
               </fieldset>
               <details className="profile-advanced" ref={advancedOptionsRef} onInvalidCapture={(event) => { event.currentTarget.open = true }}><summary>高级选项</summary>
-                {protocol === 'anthropic' && <label className="field">最大输出 token 数<input aria-label="最大输出 token 数" type="number" min={1} max={1000000} step={1} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="留空使用默认 262144" /><small>单次回答的输出上限，不同模型支持的上限不同。若上游拒绝请求，请在这里填写较小的值。</small></label>}
+                {protocol === 'anthropic' && <label className="field">最大输出 token 数<input aria-label="最大输出 token 数" type="number" min={1} max={1000000} step={1} value={maxOutputTokens} onChange={(event) => setMaxOutputTokens(event.target.value)} placeholder="留空使用默认 262144" /><small>单次回答的输出上限,不同模型支持的上限不同。若上游拒绝请求，请在这里填写较小的值。</small></label>}
+                <label className="field">上下文容量（tokens）<input aria-label="上下文容量" type="number" min={1} max={10000000} step={1} value={contextWindow} onChange={(event) => setContextWindow(event.target.value)} placeholder="留空使用默认值" /><small>模型支持的最大上下文窗口（输入 + 输出），自定义服务可能需要显式配置。留空时使用协议默认值。</small></label>
                 <div className="field"><label htmlFor="custom-headers">额外请求头</label><textarea id="custom-headers" rows={3} spellCheck={false} value={headers} disabled={clearHeaders} onChange={(event) => setHeaders(event.target.value)} placeholder={profile?.hasCustomHeaders ? '已保存 · 留空保留，填写 JSON 替换' : '{"X-Project": "my-project"}'} /><small>可选的 JSON 对象，值需为字符串；保存后不会回显。</small>{profile?.hasCustomHeaders && <label className="checkbox-field"><input type="checkbox" checked={clearHeaders} onChange={(event) => { setClearHeaders(event.target.checked); setHeaders('') }} />清除已保存的请求头</label>}</div>
               </details>
             </form>
-            {profile && <section className="connection-tests"><h3>连接测试</h3><p>测试使用已保存的配置。修改后请先保存。</p>{profile.models.length > 1 && <label className="field">测试模型<select aria-label="测试模型" value={testEntry!.id} onChange={(event) => setTestModel(event.target.value)}>{profile.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}</select></label>}{(['chat', 'tools', 'vision'] as const).map((kind) => <div className="test-row" key={kind}><div><strong>{kind === 'chat' ? '文字流式' : kind === 'vision' ? '图片识别' : '工具调用'}</strong><small>{testEntry!.tests[kind].status === 'untested' ? '尚未验证' : testEntry!.tests[kind].message}</small></div><span className={`test-badge ${testEntry!.tests[kind].status}`}>{testEntry!.tests[kind].status === 'passed' ? '已验证' : testEntry!.tests[kind].status === 'failed' ? '失败' : '未验证'}</span><button className="secondary-button" disabled={busy} onClick={() => void test(kind)}>{testing === kind ? '测试中…' : kind === 'chat' ? '测试文字' : kind === 'vision' ? '测试视觉' : '测试工具'}</button></div>)}<p className="test-explanation">文字连通与工具能力分别验证，文字聊天可独立使用。</p></section>}
+            {profile && <section className="connection-tests"><h3>连接测试</h3><p>测试使用已保存的配置。修改后请先保存。</p>{profile.models.length > 1 && <label className="field">测试模型<select aria-label="测试模型" value={testEntry!.id} onChange={(event) => setTestModel(event.target.value)}>{profile.models.map((entry) => <option key={entry.id} value={entry.id}>{entry.id}</option>)}</select></label>}{(['chat', 'tools', 'vision'] as const).map((kind) => <div className="test-row" key={kind}><div><strong>{kind === 'chat' ? '文字流式' : kind === 'vision' ? '图片识别' : '工具调用'}</strong><small>{testEntry!.tests[kind].status === 'untested' ? '尚未验证' : testEntry!.tests[kind].message}</small></div><span className={`test-badge ${testEntry!.tests[kind].status}`}>{testEntry!.tests[kind].status === 'passed' ? '已验证' : testEntry!.tests[kind].status === 'failed' ? '失败' : '未验证'}</span><button className="secondary-button" disabled={busy} onClick={() => void test(kind)}>{testing === kind ? '测试中…' : kind === 'chat' ? '测试文字' : kind === 'vision' ? '测试视觉' : '测试工具'}</button></div>)}<p className="test-explanation">文字流式、工具调用和图片识别分别验证。</p></section>}
             </div>
             <div className="profile-footer">
               {confirmDelete && <div className="delete-confirm"><span>删除这个服务？聊天记录会保留。</span><button className="danger-button" autoFocus disabled={busy} onClick={() => void deleteProfile()}>确认删除服务</button><button className="text-button" onClick={() => setConfirmDelete(false)}>取消</button></div>}

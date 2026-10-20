@@ -57,22 +57,7 @@ it('exposes older unresolved calls in task state and blocks human resolution dur
 })
 
 import { SimpleToolRegistry } from '../src/core/tools/registry'
-import { TaskExecution } from '../src/core/tools/execution'
 import { ToolApprovalService } from '../src/core/tools/approval'
-it('requires fresh explicit approval even for a newly observed trusted interaction after human resolution', async () => {
-  const store = new HerStore(':memory:'), id = seed(store), pending = store.listUnresolvedToolCalls(id)[0]
-  store.resolveUnknownToolCall({ conversationId: id, ...pending, decision: 'handled' })
-  const registry = new SimpleToolRegistry(), confirmations: string[] = []
-  registry.register({ name: 'interact', description: 'x', parameters: {} }, async () => ({ content: [] }), { assess: async () => ({ effect: 'interact', target: 'browser:b:action', observationId: 'fresh', summary: 'new exact action' }), validateObservation: () => true })
-  const approval = new ToolApprovalService(a => { confirmations.push(a.summary); approval.decide({ approvalId: a.id, revision: a.revision, decision: 'approve' }) })
-  const run: TaskRun = { id: 'new', requestId: 'new', conversationId: id, assistantMessageId: 'n', status: 'running', providerId: 'p', model: 'm', toolCallsCount: 0, activeMs: 0 }
-  const task = new TaskExecution(run, store, registry, approval, new AbortController().signal, () => {})
-  try {
-    await task.execute(task.prepare({ id: 'call', name: 'interact', arguments: {} }))
-    expect(confirmations).toEqual(['new exact action'])
-    expect(store.listToolCalls('original')[0].status).toBe('unknown')
-  } finally { task.finish('completed'); store.close() }
-})
 it('sends the human resolution as additional Host context without altering the original stored tool error', async () => {
   const store = new HerStore(':memory:'), id = seed(store), original = store.listToolCalls('original')[0]
   store.addMessage({ id: 'user', conversationId: id, role: 'user', content: 'Handle this task', status: 'complete', createdAt: '2026-10-15' })

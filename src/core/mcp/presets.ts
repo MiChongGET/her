@@ -9,6 +9,8 @@ export const PEEKABOO_TOOLS = ['app', 'window', 'see', 'click', 'type', 'press',
 export const PEEKABOO_ARGS = ['mcp', '--no-remote', '--transport', 'stdio', '--allow-foreground']
 export const PEEKABOO_ENV = { PEEKABOO_ALLOW_TOOLS: PEEKABOO_TOOLS.join(','), PEEKABOO_DISABLE_MCP_AUTOCONNECT: 'true' }
 export const OPEN_WEBSEARCH_ENV = { MODE: 'stdio', SEARCH_MODE: 'request', DEFAULT_SEARCH_ENGINE: 'bing', ALLOWED_SEARCH_ENGINES: 'bing', USE_PROXY: 'false', OPEN_WEBSEARCH_QUIET_STARTUP: 'true', PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1' }
+/** Presets whose adapter keeps per-conversation observation state, so each conversation gets its own connection. */
+export const SCOPED_PRESETS: ReadonlySet<string> = new Set(['peekaboo', 'playwright'])
 export const PRESETS: McpPreset[] = [
   { id: 'peekaboo', name: 'Mac 操作 · Peekaboo', version: PEEKABOO_VERSION, defaultEnabled: true, executable: true, environmentDefaults: PEEKABOO_ENV, guidance: '单独安装 @steipete/peekaboo@4.9.3，将原生 peekaboo 放入 ~/.local/share/her/dependencies/peekaboo-4.9.3/peekaboo；不要使用 npm 的 JS wrapper。向实际 Her 宿主授予屏幕录制和辅助功能权限。' },
   { id: 'playwright', name: 'Chrome 浏览器 · Playwright', version: '0.0.83', defaultEnabled: true, executable: true, environmentDefaults: {}, guidance: '安装 Node.js（>=20.0.0）、Chrome；在 ~/.local/share/her/dependencies/web-tools-v1 用 Her.app/Contents/Resources/mcp-web-dependencies（源码版 resources/mcp-web-dependencies）的固定 lock 安装 @playwright/mcp@0.0.83（禁用 scripts 和浏览器下载）。安装官方 Playwright 扩展 mmlmfjhmonkocbjadbfplnigmagldckm，由用户批准连接和标签范围。仅使用 --extension --no-webmcp；工具就绪不代表 Chrome 已连接。观察可能关闭并重建崩溃标签，读取也需确认。'  },

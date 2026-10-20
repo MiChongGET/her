@@ -39,6 +39,7 @@ export default function App() {
   const [currentId, setCurrentId] = useState<string | null>(null)
   const [messagesByConversation, setMessagesByConversation] = useState<Record<string, ChatMessage[]>>({})
   const [tasks, setTasks] = useState<Record<string, TaskEvent | null>>({})
+  const [queues, setQueues] = useState<Record<string, ConversationQueueState>>({})
   const taskVersions = useRef(new Map<string, number>())
   const requestVersion = useRef(0)
   const [loadingMessages, setLoadingMessages] = useState(false)
@@ -210,7 +211,13 @@ export default function App() {
         if (subscribed && task && !completedRequests.current.has(task.requestId) && ['running', 'awaiting_confirmation'].includes(task.run.status) && version === (taskVersions.current.get(conversation.id) ?? 0)) receiveTask(task)
       }))
     }).catch(() => {})
-    return () => { subscribed = false; unsubscribeRequest(); unsubscribe() }
+    const unsubscribeTask = window.her.onTaskEvent(task => {
+      if (!completedRequests.current.has(task.requestId)) receiveTask(task)
+    })
+    const unsubscribeQueue = window.her.onQueueEvent(queue => {
+      setQueues(prev => ({ ...prev, [queue.conversationId]: queue }))
+    })
+    return () => { subscribed = false; unsubscribeRequest(); unsubscribe(); unsubscribeTask(); unsubscribeQueue() }
   }, [loadBootstrap, receiveTask])
 
   useEffect(() => {
@@ -452,6 +459,8 @@ export default function App() {
     conversationGroups[index].items.push(item)
   }
 
+  const queue = currentId ? queues[currentId] : null
+
   return <div className={`app-shell${resizingSidebar ? ' is-resizing' : ''}`}>
     <button className="icon-button sidebar-toggle" aria-label={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} title={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} aria-expanded={!sidebarHidden} aria-controls="conversation-sidebar" onClick={() => setSidebarHidden(hidden => !hidden)}><Icon name="sidebar" /></button>
     <aside id="conversation-sidebar" className="sidebar" aria-label="会话侧栏" hidden={sidebarHidden} style={{ width: sidebarWidth }} data-compact={sidebarWidth < 240}>
@@ -465,7 +474,7 @@ export default function App() {
           <div id={`conversation-group-${group.label}`} hidden={collapsedGroups[group.label]}>
           {group.items.map((item) => <div key={item.id} className="conversation-row">
           <button className={`conversation-item ${item.id === currentId ? 'selected' : ''}`} aria-label={item.title} aria-current={item.id === currentId ? 'page' : undefined} onClick={() => { changeConversation(item.id); setError(''); setDraft(''); followStream.current = true }}>
-            <Icon name="chat" /><span><span className="conversation-heading"><strong>{item.title}</strong><time className="conversation-updated" dateTime={item.updatedAt} title={new Date(item.updatedAt).toLocaleString('zh-CN')}>{group.label === '更早' ? new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></span><small>{conversationPreview(item.lastMessage)}</small></span>
+            <Icon name="chat" /><span><span className="conversation-heading"><strong>{item.title}</strong>{tasks[item.id] && <span className={`task-indicator ${tasks[item.id]!.state}`} title={tasks[item.id]!.state === 'running' ? '执行中' : tasks[item.id]!.state === 'approval' ? '等待确认' : tasks[item.id]!.state === 'paused' ? '已暂停' : '执行中'}>{tasks[item.id]!.state === 'running' ? '●' : tasks[item.id]!.state === 'approval' ? '!' : tasks[item.id]!.state === 'paused' ? '▌▌' : '●'}</span>}<time className="conversation-updated" dateTime={item.updatedAt} title={new Date(item.updatedAt).toLocaleString('zh-CN')}>{group.label === '更早' ? new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : new Date(item.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></span><small>{conversationPreview(item.lastMessage)}</small></span>
           </button>
           <button className="conversation-delete" aria-label={`删除对话 ${item.title}`} onClick={() => void trashConversation(item.id)}><Icon name="trash" /></button>
           </div>)}
@@ -508,7 +517,9 @@ export default function App() {
           <p>{activeProfile ? '今天的小事、没想通的问题，\n或者只是想找个人聊一会儿。' : '用你自己的服务地址、模型和密钥，\n让这段对话从这里开始。'}</p>
           {!activeProfile && <button className="primary-button" onClick={() => void openSettings()}>配置模型服务<Icon name="arrow" /></button>}
           {activeProfile && <div className="welcome-footnote"><span />不必组织好语言，我们可以一起理清楚。<span /></div>}
-        </section> : <div className="messages" aria-label="聊天消息">{messages.map((message, index) => {
+        </section> : <>
+        {queue && queue.items.length > 0 && <div className="queued-messages" role="status" aria-label="排队中的消息">{queue.items.map(item => <div key={item.requestId} className="queued-message"><span className="queued-indicator">●</span><span className="queued-preview">{item.preview}</span><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</time></div>)}{queue.paused && <div className="queue-paused">{queue.paused === 'stopped' ? '已停止' : queue.paused === 'failed' ? '任务失败' : queue.paused === 'limit' ? '达到限制' : queue.paused === 'source-revoked' ? '来源已撤销' : queue.paused === 'unknown-action' ? '未知动作' : queue.paused === 'compaction-stopped' ? '压缩已停止' : queue.paused === 'compaction-failed' ? '压缩失败' : '等待重启'}</div>}{queue.compacting && <div className="queue-compacting">正在压缩上下文…</div>}</div>}
+        <div className="messages" aria-label="聊天消息">{messages.map((message, index) => {
           const previousUser = messages.slice(0, index).findLast((item) => item.role === 'user')
           const retryable = !message.toolCalls?.length && message.id === lastAssistantId && ['failed', 'cancelled'].includes(message.status) && previousUser
           return <article key={message.id} className={`message message-${message.role}`} data-status={message.status}>
@@ -549,9 +560,10 @@ export default function App() {
               {(retryable || message.status === 'failed') && <div className="message-actions">{retryable && <button className="retry-button" disabled={busy} onClick={() => void send(previousUser.content, message.id)}><Icon name="retry" />{message.status === 'failed' ? '重试' : '重新生成'}</button>}{message.status === 'failed' && <button className="retry-button settings-link" onClick={() => void openSettings(message.profileId)}><Icon name="settings" />检查模型设置</button>}</div>}
             </div>
           </article>
-        })}</div>}
+        })}</div>
         {busy && !messages.some((item) => item.status === 'streaming') && activeRequest?.conversationId === currentId && <div className="pending-message" role="status"><span className="thinking-dots"><i /><i /><i /></span>正在连接模型…</div>}
         <div ref={bottomRef} />
+      </>}
       </div>
 
       <div className="composer-area" onDragOver={event => { if (event.dataTransfer.types.includes('Files')) event.preventDefault() }} onDrop={event => { event.preventDefault(); const dropped = Array.from(event.dataTransfer.files); if (dropped.length) void selectFiles('file', 'conversation', dropped) }}>

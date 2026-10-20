@@ -1,6 +1,9 @@
 export type ProviderProtocol = 'openai' | 'anthropic' | 'openai-responses'
 export type TestKind = 'chat' | 'tools' | 'vision'
 
+// Task 3.1: Authentication methods for services
+export type AuthMethod = 'api-key' | 'headers' | 'none'
+
 export interface ConnectionTestResult {
   status: 'untested' | 'passed' | 'failed'
   message: string
@@ -14,6 +17,7 @@ export interface ServiceModel {
   tests: Record<TestKind, ConnectionTestResult>
 }
 
+// Task 3.1: Service profile supporting Pi directory models and custom compatible services
 export interface ProviderProfile {
   id: string
   name: string
@@ -21,9 +25,12 @@ export interface ProviderProfile {
   baseUrl: string
   model: string
   models: ServiceModel[]
+  authMethod: AuthMethod
   hasApiKey: boolean
   hasCustomHeaders: boolean
   maxOutputTokens?: number
+  /** For custom services, context window capacity is required */
+  contextWindow?: number
 }
 
 export interface SaveProfileInput {
@@ -33,9 +40,12 @@ export interface SaveProfileInput {
   baseUrl: string
   model: string
   models?: { id: string; longOutput?: boolean; multimodal?: boolean }[]
+  authMethod: AuthMethod
   apiKey?: string
   customHeaders?: Record<string, string>
   maxOutputTokens?: number | null
+  /** Required for custom services when not using Pi directory models */
+  contextWindow?: number
 }
 
 export interface McpTransportConfig {
@@ -88,6 +98,8 @@ export interface RuntimeProvider {
   apiKey: string
   customHeaders: Record<string, string>
   maxOutputTokens?: number
+  /** Tokens the model accepts; drives compaction reserve/keepRecent. */
+  contextWindow?: number
 }
 
 export interface FileGrant {
@@ -278,6 +290,36 @@ export interface SendMessageInput {
 export interface SendMessageResult {
   userMessage: ChatMessage
   assistantMessage: ChatMessage
+  /** True when the conversation was busy and the message waits in the queue. */
+  queued?: boolean
+}
+
+/** Why a conversation's queue is not running on by itself. */
+export type QueuePauseReason = 'stopped' | 'failed' | 'limit' | 'source-revoked' | 'unknown-action' | 'compaction-stopped' | 'compaction-failed' | 'restart'
+
+export interface QueuedInput {
+  requestId: string
+  userMessageId: string
+  /** Start of the message, enough to recognise it in the queue. */
+  preview: string
+  profileId: string | null
+  model: string | null
+  createdAt: string
+}
+
+export interface CompactConversationInput {
+  conversationId: string
+  profileId: string
+  model?: string
+}
+
+export interface ConversationQueueState {
+  conversationId: string
+  items: QueuedInput[]
+  /** Set when the queue waits for the user instead of running on. */
+  paused: QueuePauseReason | null
+  running: boolean
+  compacting: boolean
 }
 
 export interface ActionAssessment {
@@ -382,6 +424,12 @@ export interface HerApi {
   revokeConversationApprovals(conversationId: string): Promise<void>
   resolveUnknownToolCall(input: ResolveUnknownToolCallInput): Promise<TaskEvent | null>
   continueTask(input: ContinueTaskInput): Promise<SendMessageResult>
+  getQueue(conversationId: string): Promise<ConversationQueueState>
+  cancelQueuedMessage(conversationId: string, requestId: string): Promise<void>
+  resumeQueue(conversationId: string): Promise<void>
+  compactConversation(input: CompactConversationInput): Promise<void>
+  stopCompaction(conversationId: string): Promise<void>
+  switchModel(input: CompactConversationInput): Promise<void>
   onRequestEvent(callback: (event: RequestEvent) => void): () => void
   onTaskEvent(callback: (event: TaskEvent) => void): () => void
   getArtifactPreview(id: string, conversationId: string): Promise<{ mimeType: string; dataUrl: string }>

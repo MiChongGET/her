@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,6 +15,7 @@ import { startMockHttp, type MockOptions } from './helpers/mock-mcp'
 import { SdkError, SdkErrorCode } from '@modelcontextprotocol/client'
 import { ToolApprovalService } from '../src/core/tools/approval'
 
+const newConversation = (store: HerStore) => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return { id } }
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close() })
 async function setup(options: MockOptions = {}, transport: 'stdio' | 'http' = 'stdio', allowedTools?: string[], policy?: McpServicePolicy) {
@@ -28,7 +30,7 @@ async function setup(options: MockOptions = {}, transport: 'stdio' | 'http' = 's
   const artifacts = new ToolArtifactStore(store)
   const manager = new McpConnectionManager(config, registry, artifacts, () => policy ?? ({ allowedTools }))
   cleanup.push(() => manager.shutdown())
-  const conversation = store.createConversation()
+  const conversation = newConversation(store)
   const context: ToolExecutionContext = { conversationId: conversation.id, runId: 'run', callId: 'call', signal: new AbortController().signal, authorize: async () => {} }
   return { manager, registry, config, artifacts, saved, context, http, store }
 }
@@ -84,7 +86,7 @@ describe('MCP host', () => {
     expect(result).toMatchObject({ structuredContent: { count: 7 }, meta: { source: 'mock' }, content: [{ type: 'text', text: 'hello' }, { type: 'image', mimeType: 'image/png' }, { type: 'resource_link', uri: 'file:///private/never-read' }] })
     const image = result.content[1]; if (image.type !== 'image') throw new Error('missing image')
     expect(Buffer.from(await artifacts.read(image.artifactId, context)).toString()).toBe('image-data')
-    await expect(artifacts.read(image.artifactId, { ...context, conversationId: store.createConversation().id })).rejects.toThrow(/无权/)
+    await expect(artifacts.read(image.artifactId, { ...context, conversationId: newConversation(store).id })).rejects.toThrow(/无权/)
     expect(await manager.call(saved.id, 'echo', { value: 2 }, context)).toMatchObject({ isError: true, content: [{ text: 'failed' }] })
     const unknown = await manager.call(saved.id, 'echo', { value: 3 }, context)
     expect(unknown.isError).toBe(true)

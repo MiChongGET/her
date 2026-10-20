@@ -5,6 +5,7 @@ import type { ToolDefinition, ToolExecutor, ToolExecutionContext, ToolRegistrati
 import { normalizeToolResult } from './results'
 import { ApprovalError } from './approval'
 import { abortable } from './abort'
+import type { DispatchPhase } from './ledger'
 
 interface RegisteredTool {
   definition: ToolDefinition
@@ -73,29 +74,76 @@ export class SimpleToolRegistry implements ToolRegistry {
       ...(tool.options.conversationApprovalScope ? { conversationScope: { id: tool.options.conversationApprovalScope,
         validate: () => this.tools.get(name) === tool && tool.options.isAvailable?.() !== false } } : {})
     } }
-    if (context.authorize) await context.authorize(assessment, checked)
-    else if (assessment.effect !== 'read' && !trustedInteraction && !checked.approvalBinding.allowAllOperations) throw new ApprovalError('这个动作需要用户确认。')
+    context.ledger?.assertTargetFree(assessment)
+    // A fresh observation lets a simple interaction proceed unprompted, except on a target recovered from an unknown outcome.
+    const trusted = trustedInteraction && !context.ledger?.recovered(assessment.target)
+    if (context.authorize) { if (!trusted) await context.authorize(assessment, checked) }
+    else if (assessment.effect !== 'read' && !trusted && !checked.approvalBinding.allowAllOperations) throw new ApprovalError('这个动作需要用户确认。')
     // An interact assessment without live observation must use the same explicit approval gate as unknown actions.
     if (!checked.approvalBinding.validate()) throw new ApprovalError('工具配置或动作参数已失效。')
     context.signal.throwIfAborted()
-    context.onAttempt?.()
-    if (!tool.options.deferDispatch) context.onDispatch?.(assessment)
-    const controller = new AbortController()
-    const signal = AbortSignal.any([context.signal, controller.signal])
-    const timer = setTimeout(() => controller.abort(new Error('工具执行超时，结果可能未知。')), tool.options.timeoutMs ?? 60_000)
+    // Approval is done; only now wait for conflicting resources, so a pending prompt never blocks other work.
+    const keys = tool.options.resources?.(structuredClone(args), assessment) ?? []
+    const release = keys.length && context.resources ? await context.resources.acquire(keys, context.signal) : undefined
     try {
-      return normalizeToolResult(await abortable(tool.executor(dispatchArgs, { ...context, signal,
-        markDispatched: phase => {
-          signal.throwIfAborted()
-          if (this.tools.get(name) !== tool || tool.options.isAvailable?.() === false || context.validateRuntime?.() === false) throw new ApprovalError('工具运行态已失效。')
-          context.onDispatch?.(assessment, phase)
-        },
-        completePreflight: () => { signal.throwIfAborted(); context.onPreflightComplete?.() }
-      }), signal))
-    } catch (error) {
-      context.signal.throwIfAborted()
-      return failure(`Tool execution failed: ${error instanceof Error ? error.message : String(error)}`)
-    } finally { clearTimeout(timer) }
+      if (!checked.approvalBinding.validate()) throw new ApprovalError('工具配置或动作参数已失效。')
+      // Reads change nothing outside, so only mutations are ledgered. begin() throws, and nothing runs, if the write fails.
+      const ledger = assessment.effect === 'read' ? undefined : context.ledger
+      ledger?.begin(context.runId, context.callId, name, dispatchArgs, assessment)
+      let phase: DispatchPhase = 'none', noEffect = false, observedTarget: string | undefined
+      const settle = (outcome: 'ok' | 'error' | 'thrown', message: string) => {
+        try {
+          if (outcome === 'ok') ledger?.succeeded(context.runId, context.callId)
+          else if (phase !== 'none' && phase !== 'preflight-completed' && !noEffect) {
+            ledger?.unknown(context.runId, context.callId, context.conversationId, assessment.target,
+              phase === 'preflight' ? '观察预检可能已关闭或重建崩溃标签，结果未知；最终动作未派发。' : '动作已派发但结果未知；禁止自动重放。')
+          } else if (outcome === 'thrown') ledger?.cancelled(context.runId, context.callId)
+          else ledger?.failed(context.runId, context.callId, message)
+        } catch { /* the row stays running and ActionLedger.recover() settles it as unknown on the next start */ }
+      }
+      let result: ToolResult
+      try {
+        context.onAttempt?.()
+        if (!tool.options.deferDispatch) { ledger?.dispatched(context.runId, context.callId, 'action'); phase = 'action'; context.onDispatch?.(assessment) }
+        const controller = new AbortController()
+        const signal = AbortSignal.any([context.signal, controller.signal])
+        const timer = setTimeout(() => controller.abort(new Error('工具执行超时，结果可能未知。')), tool.options.timeoutMs ?? 60_000)
+        try {
+          const execution = tool.executor(dispatchArgs, { ...context, signal,
+            onObserved: target => { if (!signal.aborted && context.validateRuntime?.() !== false) observedTarget = target; context.onObserved?.(target) },
+            onNoEffect: () => { noEffect = true; context.onNoEffect?.() },
+            markDispatched: next => {
+              signal.throwIfAborted()
+              if (this.tools.get(name) !== tool || tool.options.isAvailable?.() === false || context.validateRuntime?.() === false) throw new ApprovalError('工具运行态已失效。')
+              ledger?.dispatched(context.runId, context.callId, next); phase = next
+              context.onDispatch?.(assessment, next)
+            },
+            completePreflight: () => {
+              signal.throwIfAborted()
+              ledger?.preflightCompleted(context.runId, context.callId); phase = 'preflight-completed'
+              context.onPreflightComplete?.()
+            }
+          })
+          let abandoned = false
+          // Whatever a stopped or timed-out call eventually returns is audit only: it never changes the call or the run.
+          void execution.then(late => { if (abandoned) ledger?.audit(context.runId, context.callId, late) }, () => {})
+          try { result = normalizeToolResult(await abortable(execution, signal)) }
+          catch (error) { abandoned = true; throw error }
+        } catch (error) {
+          context.signal.throwIfAborted()
+          result = failure(`Tool execution failed: ${error instanceof Error ? error.message : String(error)}`)
+        } finally { clearTimeout(timer) }
+      } catch (error) {
+        settle('thrown', error instanceof Error ? error.message : String(error))
+        throw error
+      }
+      settle(result.isError ? 'error' : 'ok', result.content.map(part => part.type === 'text' ? part.text : '').join('\n'))
+      // Only a successful read of the very target that was observed can lift its quarantine.
+      if (assessment.effect === 'read' && !result.isError && !context.signal.aborted && context.validateRuntime?.() !== false) {
+        context.ledger?.observed(observedTarget ?? assessment.target)
+      }
+      return result
+    } finally { release?.() }
   }
 }
 

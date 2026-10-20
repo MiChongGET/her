@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, readFile, copyFile } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
@@ -30,7 +31,7 @@ it.runIf(process.env.HER_TEST_MARKITDOWN === '1')('permanent pinned runtime: pri
   }); cleanup.push(() => manager.shutdown())
   const service = new DocumentService(store, files, () => createMarkItDownParser(configs, manager))
   registerDocumentTools(registry, service)
-  const context = { conversationId: store.createConversation().id, runId: 'run', callId: 'call', signal: new AbortController().signal,
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'run', callId: 'call', signal: new AbortController().signal,
     authorize: vi.fn(async () => {}), onAttempt: vi.fn(), onDispatch: vi.fn() }
   await manager.connect(saved.id)
   expect(await manager.listTools(saved.id)).toEqual([])
@@ -77,7 +78,7 @@ it('private seam hides raw tool, validates input/output, preserves full cache te
   const registry = new SimpleToolRegistry()
   const manager = new McpConnectionManager(configs, registry, new ToolArtifactStore(store), config => config.name === 'trusted' ? MARKITDOWN_POLICY : { allowedTools: [] })
   cleanup.push(() => manager.shutdown())
-  const context = { conversationId: store.createConversation().id, runId: 'r', callId: 'c', signal: new AbortController().signal, authorize: vi.fn(async () => {}), onAttempt: vi.fn(), onDispatch: vi.fn() }
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'r', callId: 'c', signal: new AbortController().signal, authorize: vi.fn(async () => {}), onAttempt: vi.fn(), onDispatch: vi.fn() }
   for (const mode of ['', 'invalid-output', 'delay', 'untrusted']) {
     const config = await configs.save({ name: mode === 'untrusted' ? 'custom' : 'trusted', enabled: true, transport: 'stdio', command: process.execPath, args: [resolve('tests/helpers/document-mcp.ts'), mode] })
     await manager.connect(config.id)

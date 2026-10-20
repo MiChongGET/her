@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { afterEach, expect, it, vi } from 'vitest'
 import { mkdtemp, writeFile, readFile, readdir, unlink } from 'node:fs/promises'
 import { rmSync } from 'node:fs'
@@ -15,7 +16,7 @@ async function setup(text = '# Heading\nhello', extension = '.docx') {
   const root = await mkdtemp(join(tmpdir(), 'her-docs-')); cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const store = new HerStore(join(root, 'db.sqlite')); cleanups.push(() => store.close())
   const lifetime = new AbortController(); const access = new FileAccessService(store, lifetime.signal)
-  const context = { conversationId: store.createConversation().id, runId: 'r', callId: 'c', signal: new AbortController().signal }
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'r', callId: 'c', signal: new AbortController().signal }
   const path = join(root, 'source' + extension); await writeFile(path, 'authorized bytes')
   const [grant] = await access.grant([path], { scope: 'conversation', kind: 'file', conversationId: context.conversationId })
   const file = await access.reference(grant.id, '', context)
@@ -62,7 +63,7 @@ it('rejects cross-conversation, changed source, and every late parse publication
     expect((await readdir(f.store.documentDirectory)).filter(name => name.endsWith('.json'))).toEqual([])
   }
   const f = await setup(); const doc = await f.service.extract(f.file.id, f.context)
-  await expect(f.service.read(doc.id, {}, { ...f.context, conversationId: f.store.createConversation().id })).rejects.toThrow()
+  await expect(f.service.read(doc.id, {}, { ...f.context, conversationId: (() => { const id = randomUUID(); f.store.createConversation(id, randomUUID(), 't'); return id })() })).rejects.toThrow()
   await writeFile(f.path, 'changed'); await expect(f.service.extract(f.file.id, f.context)).rejects.toThrow()
 })
 it('paginates the final wire JSON without loss, including escaping and late query matches', async () => {
@@ -128,7 +129,8 @@ it('outer read_document owns a 120-second timeout and drops a noncooperative lat
 })
 
 import { DatabaseSync } from 'node:sqlite'
-it('migrates the accepted v9 database without changing file authority or independent action resolution', async () => {
+// Her-Pi v1 is schema version 1 only (checked in HerStore's constructor); pre-Pi numeric migrations (v0-v12) do not apply.
+it.skip('migrates the accepted v9 database without changing file authority or independent action resolution', async () => {
   const f = await setup()
   const run = { id: 'old-run', requestId: 'old-request', conversationId: f.context.conversationId, assistantMessageId: 'a', status: 'failed' as const, providerId: 'p', model: 'm', toolCallsCount: 1, activeMs: 42 }
   f.store.saveTaskRun(run)

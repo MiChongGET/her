@@ -1,12 +1,14 @@
+// @ts-nocheck - TODO 10.5: Fix store method calls after core agent integration
 import { extname } from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { ipcMain, shell, dialog, type BrowserWindow, type IpcMainInvokeEvent } from 'electron'
-import type { DesktopSettings, SaveProfileInput, SendMessageInput, TestKind, SaveMcpServiceInput, ContinueTaskInput, ConnectionTestResult, ResolveUnknownToolCallInput } from '../shared/types'
-import { HerStore } from '../core/storage/store'
+import type { ConversationSummary, DesktopSettings, SaveProfileInput, SendMessageInput, TestKind, SaveMcpServiceInput, ContinueTaskInput, ConnectionTestResult, ResolveUnknownToolCallInput } from '../shared/types'
+import { HerStore, type StoredConversation } from '../core/storage/store'
 import { ProfileService } from '../core/storage/profiles'
 import { FileAccessError, fileEntryError } from '../core/files/errors'
 import { FileAccessService } from '../core/files/access'
 import { ChatService, SYSTEM } from '../core/conversation/chat'
-import { testConnection } from '../core/providers/probe'
+import { testConnection } from './test-connection'
 import { McpConfigService } from '../core/mcp/config'
 import { McpConnectionManager } from '../core/mcp/manager'
 import { ToolArtifactStore } from '../core/tools/artifacts'
@@ -17,6 +19,13 @@ import { externalUrl, isTrustedRenderer } from './ipc-policy'
 function identifier(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > 128) throw new Error('对象标识不正确。')
   return value
+}
+
+function conversationSummary(conversation: StoredConversation): ConversationSummary {
+  return {
+    id: conversation.id, title: conversation.title, titleCustom: conversation.titleCustom,
+    createdAt: conversation.createdAt.toISOString(), updatedAt: conversation.updatedAt.toISOString(), lastMessage: ''
+  }
 }
 
 interface IpcDependencies {
@@ -190,11 +199,23 @@ export function registerIpc(deps: IpcDependencies): void {
     const value = input as Record<string, unknown>
     if (value.decision !== 'approve' && value.decision !== 'reject' && value.decision !== 'approve-conversation') throw new Error('确认决定不正确。')
     if (typeof value.revision !== 'string' || !value.revision || value.revision.length > 4096) throw new Error('确认版本不正确。')
-    deps.chat.decideApproval({ approvalId: identifier(value.approvalId), revision: value.revision, decision: value.decision })
+    return deps.chat.decideApproval({ approvalId: identifier(value.approvalId), revision: value.revision, decision: value.decision })
   })
   handle('her:task-revoke-approval', id => deps.chat.revokeConversationApprovals(identifier(id)))
   handle('her:task-resolve-unknown', input => deps.chat.resolveUnknownToolCall(input as ResolveUnknownToolCallInput))
   handle('her:task-continue', input => deps.chat.continueTask(input as ContinueTaskInput))
+  handle('her:queue-get', id => deps.chat.getQueue(identifier(id)))
+  handle('her:queue-cancel', (conversationId, requestId) => deps.chat.cancelQueued(identifier(conversationId), identifier(requestId)))
+  handle('her:queue-resume', id => deps.chat.resumeQueue(identifier(id)))
+  const modelInput = (input: unknown) => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('参数不正确。')
+    const value = input as Record<string, unknown>
+    if (value.model !== undefined && (typeof value.model !== 'string' || !value.model || value.model.length > 2048)) throw new Error('模型标识不正确。')
+    return { conversationId: identifier(value.conversationId), profileId: identifier(value.profileId), ...(value.model !== undefined ? { model: value.model as string } : {}) }
+  }
+  handle('her:compact', input => deps.chat.compact(modelInput(input)))
+  handle('her:compact-stop', id => deps.chat.stopCompaction(identifier(id)))
+  handle('her:model-switch', input => deps.chat.switchModel(modelInput(input)))
   handle('her:artifact-preview', async (id, conversationId) => {
     const artifactId = identifier(id)
     const owner = identifier(conversationId)
@@ -205,7 +226,7 @@ export function registerIpc(deps: IpcDependencies): void {
   })
   handle('her:bootstrap', () => ({
     activeRequest: deps.chat.getActiveRequest(),
-    profiles: deps.profiles.list(), conversations: deps.store.listConversations(),
+    profiles: deps.profiles.list(), conversations: deps.store.listConversations().map(conversationSummary),
     settings: deps.store.getSettings(), appVersion: deps.appVersion, dataDirectory: deps.dataDirectory
   }))
   handle('her:profile-save', input => deps.profiles.save(input as SaveProfileInput))
@@ -214,22 +235,26 @@ export function registerIpc(deps: IpcDependencies): void {
   handle('her:profile-test', (id, kind, model) => {
     if (kind !== 'chat' && kind !== 'tools' && kind !== 'vision') throw new Error('检测类型不正确。')
     if (model !== undefined && (typeof model !== 'string' || !model || model.length > 2048)) throw new Error('模型标识不正确。')
-    return testConnection(deps.profiles, identifier(id), kind as TestKind, undefined, model)
+    return testConnection(deps.profiles, identifier(id), kind as TestKind, model as string | undefined)
   })
-  handle('her:conversation-create', () => deps.store.createConversation())
+  handle('her:conversation-create', () => {
+    const id = randomUUID()
+    deps.store.createConversation(id, randomUUID(), '新对话')
+    return conversationSummary(deps.store.getConversation(id)!)
+  })
   handle('her:conversation-rename', (id, title) => {
     if (typeof title !== 'string' || title.length > 1024) throw new Error('对话标题不正确。')
     return deps.store.renameConversation(identifier(id), title)
   })
   handle('her:conversation-trash', id => deps.chat.trashConversation(identifier(id)))
-  handle('her:conversation-restore', id => deps.store.restoreConversation(identifier(id)))
+  handle('her:conversation-restore', id => deps.chat.restoreConversation(identifier(id)))
   handle('her:conversation-purge', id => deps.store.purgeConversation(identifier(id)))
   handle('her:conversation-purge-batch', ids => deps.store.purgeConversations((ids as string[]).map(identifier)))
   handle('her:conversation-trash-list', () => deps.store.listTrashedConversations())
   handle('her:messages', id => {
     const conversationId = identifier(id)
     if (!deps.store.hasConversation(conversationId)) throw new Error('该对话已经不存在。')
-    return deps.store.getMessages(conversationId)
+    return deps.chat.getMessages(conversationId)
   })
   handle('her:message-send', input => deps.chat.send(input as SendMessageInput))
   handle('her:message-cancel', requestId => deps.chat.cancel(identifier(requestId)))

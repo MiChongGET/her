@@ -15,6 +15,7 @@ export interface McpServicePolicy {
     dispatch: (name: string, args: Record<string, unknown>, phase?: 'preflight' | 'action') => Promise<ToolResult>) => Promise<ToolResult>
   assess?: (toolName: string, args: Record<string, unknown>, context: ToolExecutionContext) => Promise<ActionAssessment>
   validateObservation?: ToolRegistrationOptions['validateObservation']
+  resources?: (toolName: string, args: Record<string, unknown>, assessment: ActionAssessment) => string[]
   timeoutMs?: 60000 | 120000
 }
 
@@ -48,7 +49,9 @@ export class McpRegistryAdapter {
           deferDispatch: policy.deferDispatch, revision: String(revision), isAvailable: available, timeoutMs: policy.timeoutMs,
           assess: policy.assess ? (args, context) => policy.assess!(entry.remote, args, context)
             : async args => ({ effect: 'unknown', target: entry.name, displayTarget: `${this.serviceName} / ${entry.remote}`, summary: `调用 ${this.serviceName} 的 ${entry.remote}，参数：${JSON.stringify(args)}` }),
-          validateObservation: policy.validateObservation
+          validateObservation: policy.validateObservation,
+          // Unless a preset names finer keys, a mutation holds its whole service so two conversations never drive one server at once.
+          resources: (args, assessment) => policy.resources ? policy.resources(entry.remote, args, assessment) : assessment.effect === 'read' ? [] : [`mcp:${serviceId}`]
         })
         this.names.set(entry.remote, entry.name)
       }

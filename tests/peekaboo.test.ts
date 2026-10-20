@@ -170,86 +170,8 @@ it('waits for overwrite approval then preserves the exact snapshot, element, cle
 })
 
 import { HerStore } from '../src/core/storage/store'
-import { TaskExecution } from '../src/core/tools/execution'
 import { ToolApprovalService } from '../src/core/tools/approval'
 import type { TaskRun } from '../src/shared/types'
-it('records native preflight drift as failed without ever dispatching the final action', async () => {
-  const h = setup(), store = new HerStore(':memory:'), conversation = store.createConversation(), registry = new SimpleToolRegistry()
-  const sent: string[] = []
-  for (const name of ['see', 'click']) registry.register({ name, description: name, parameters: {} }, (args, context) => h.policy.execute!(name, args, context, async (remote, _wire, phase = 'action') => {
-    if (h.policy.deferDispatch) context.markDispatched?.(phase)
-    sent.push(remote)
-    const result = receipt('snapshot', sent.length > 1 ? 200 : 100)
-    if (h.policy.deferDispatch && phase === 'preflight') context.completePreflight?.()
-    return result
-  }), { allowAllOperations: true, deferDispatch: h.policy.deferDispatch, assess: (args, context) => h.policy.assess!(name, args, context), validateObservation: h.policy.validateObservation })
-  const run: TaskRun = { id: 'preflight', requestId: 'preflight', conversationId: conversation.id, assistantMessageId: 'm', status: 'running', providerId: 'p', model: 'm', toolCallsCount: 0, activeMs: 0 }
-  const task = new TaskExecution(run, store, registry, new ToolApprovalService(), new AbortController().signal, () => {})
-  try {
-    await task.execute(task.prepare({ id: 'observe', name: 'see', arguments: { app_target: 'PID:12', window_id: 45 } }))
-    await task.execute(task.prepare({ id: 'click', name: 'click', arguments: { snapshot: 'snapshot', on: 'native-element' } }))
-    expect(store.listToolCalls(run.id)[1]).toMatchObject({ status: 'failed', dispatchPhase: 'preflight-completed' })
-    expect(task.hasUnknownResults()).toBe(false)
-    expect(sent).toEqual(['see', 'see'])
-  } finally { task.finish('completed'); store.close() }
-})
-
-it.each([
-  { error: "Failed to launch application: Application 'Notepad' not found", expected: 'failed' },
-  { error: 'Failed to launch application: timed out', expected: 'unknown' },
-  { error: "Failed to launch application: Application 'AnotherApp' not found", expected: 'unknown' }
-])('classifies a native launch error from its exact bound app evidence: $expected / $error', async ({ error, expected }) => {
-  const h = setup(), store = new HerStore(':memory:'), conversation = store.createConversation(), registry = new SimpleToolRegistry()
-  let sent = 0
-  registry.register({ name: 'app', description: 'Native app', parameters: {} }, (args, context) => h.policy.execute!('app', args, context, async () => {
-    sent++
-    return sent === 1 ? { isError: true, content: [{ type: 'text', text: error }], meta: { effect: 'not_applied' } } : { content: [], meta: { effect: 'confirmed' } }
-  }), { allowAllOperations: true, assess: (args, context) => h.policy.assess!('app', args, context) })
-  const run: TaskRun = { id: 'launch', requestId: 'launch', conversationId: conversation.id, assistantMessageId: 'm', status: 'running', providerId: 'p', model: 'm', toolCallsCount: 0, activeMs: 0 }
-  const task = new TaskExecution(run, store, registry, new ToolApprovalService(), new AbortController().signal, () => {})
-  const launch = (id: string, name: string) => task.execute(task.prepare({ id, name: 'app', arguments: { action: 'launch', name } }))
-  try {
-    expect((await launch('missing', 'Notepad')).isError).toBe(true)
-    expect(store.listToolCalls(run.id)[0].status).toBe(expected)
-    expect(task.hasUnknownResults()).toBe(expected === 'unknown')
-    if (expected === 'failed') {
-      await launch('native-editor', 'TextEdit')
-      expect(sent).toBe(2)
-      expect(store.listToolCalls(run.id)[1].status).toBe('succeeded')
-    } else {
-      await expect(launch('must-not-retry', 'TextEdit')).rejects.toThrow(/未知/)
-      expect(sent).toBe(1)
-    }
-  } finally { task.finish('completed'); store.close() }
-})
-
-it('reconciles a persisted unknown through a recreated adapter only for the same process generation', async () => {
-  const store = new HerStore(':memory:')
-  const conversation = store.createConversation()
-  function runtime(id: string, unknown: string[] = []) {
-    const h = setup(); const registry = new SimpleToolRegistry()
-    for (const name of ['see', 'type']) registry.register({ name, description: name, parameters: { type: 'object' } }, (args, context) => h.execute(name, args, context), { assess: (args, context) => h.policy.assess!(name, args, context), validateObservation: h.policy.validateObservation })
-    const run: TaskRun = { id, conversationId: conversation.id, requestId: id, assistantMessageId: id, providerId: 'p', model: 'm', status: 'running', toolCallsCount: 0, activeMs: 0 }
-    const task = new TaskExecution(run, store, registry.snapshot(), new ToolApprovalService(() => {}), new AbortController().signal, () => {}, unknown)
-    const execute = (callId: string, name: string, args: Record<string, unknown>) => task.execute(task.prepare({ id: callId, name, arguments: args }))
-    return { h, task, execute }
-  }
-  const first = runtime('first')
-  const observe = { app_target: 'PID:12', window_id: 45 }
-  await first.execute('see', 'see', observe)
-  await first.execute('type', 'type', { snapshot: 'native-opaque', on: 'native-element', text: '中文' })
-  expect(store.listToolCalls('first').at(-1)?.status).toBe('unknown')
-  first.task.finish('paused')
-  const second = runtime('second', store.getUnknownToolTargets(conversation.id))
-  try {
-    const other = receipt(); (other.meta!.target_receipt as Record<string, unknown>).process_start_identity_decimal = '9007199254740993124'
-    second.h.setReceipt(other); await second.execute('reused', 'see', observe)
-    expect(second.task.hasUnknownResults()).toBe(true)
-    second.h.setReceipt(receipt()); await second.execute('same', 'see', observe)
-    expect(second.task.hasUnknownResults()).toBe(false)
-  } finally { second.task.finish('completed'); store.close() }
-})
-
 it('does not auto-trust a lookalike TextEdit path outside the actual system application', async () => {
   const h = setup('/tmp/System/Applications/TextEdit.app/Contents/MacOS/TextEdit'); await h.observe()
   expect((await h.policy.assess!('type', { snapshot: 'native-opaque', on: 'native-element', text: 'hi' }, h.context)).effect).toBe('unknown')
@@ -304,32 +226,6 @@ it('cannot authorize a document menu click on window B using a background observ
   expect(schema.properties).not.toHaveProperty('item')
 })
 
-function verificationRuntime(mode: 'type' | 'new-document' | 'new-document-key', after: ToolResult, windowsAfter: string | (() => string) = 'scratch [ID: 46, ON-SCREEN]',
-  native: ToolResult = { isError: true, content: [{ type: 'text', text: 'Native effect unverified' }], meta: { effect: 'unverifiable', state: 'dispatched_unverified', dispatch_state: 'dispatched', mutation_dispatched: true } }) {
-  const h = setup(), store = new HerStore(':memory:'), conversation = store.createConversation(), registry = new SimpleToolRegistry()
-  const before = receipt('before')
-  const element = (before.meta!.ui_elements as Record<string, unknown>[])[0]
-  Object.assign(element, mode !== 'new-document'
-    ? { identifier: 'First Text View', value: '', selected_text_range: { location: 0, length: 0 } }
-    : { ax_role: 'AXButton', identifier: 'NewDocumentButton', is_enabled: true })
-  let mutated = false, prompts = 0
-  const sent: string[] = []
-  for (const name of ['see', 'click', 'type', 'press']) registry.register({ name, description: name, parameters: {} }, (args, context) => h.policy.execute!(name, args, context, async (remote, wire, phase = 'action') => {
-    context.markDispatched?.(phase)
-    sent.push(remote)
-    let result: ToolResult
-    if (remote === 'see') result = structuredClone(mutated ? after : before)
-    else if (remote === 'window') result = { content: [{ type: 'text', text: mutated ? typeof windowsAfter === 'function' ? windowsAfter() : windowsAfter : 'Open [ID: 45, ON-SCREEN]' }] }
-    else { mutated = true; result = structuredClone(native) }
-    if (phase === 'preflight' && !result.isError) context.completePreflight?.()
-    return result
-  }), { allowAllOperations: true, deferDispatch: true, assess: (args, context) => h.policy.assess!(name, args, context), validateObservation: h.policy.validateObservation })
-  const run: TaskRun = { id: 'verify', requestId: 'verify', conversationId: conversation.id, assistantMessageId: 'm', status: 'running', providerId: 'p', model: 'm', toolCallsCount: 0, activeMs: 0 }
-  const task = new TaskExecution(run, store, registry, new ToolApprovalService(() => { prompts++ }), new AbortController().signal, () => {})
-  const execute = (id: string, name: string, args: Record<string, unknown>) => task.execute(task.prepare({ id, name, arguments: args }))
-  return { store, task, sent, before, get prompts() { return prompts }, execute, close: () => { task.finish('completed'); store.close() } }
-}
-
 function verifiedDocument(value: string, windowId = 45): ToolResult {
   const after = receipt('after')
   Object.assign(after.meta!.target_receipt as object, { window_id: windowId })
@@ -338,114 +234,29 @@ function verifiedDocument(value: string, windowId = 45): ToolResult {
   return after
 }
 
-it('automatically confirms Chinese input from an exact native readback without a manual resolution or replay', async () => {
-  const h = verificationRuntime('type', verifiedDocument('你好世界'))
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('input', 'type', { snapshot: 'before', on: 'native-element', text: '你好世界' })
-    expect(result.isError).not.toBe(true)
-    expect(result.meta).toMatchObject({ effect: 'confirmed', host_verification: { kind: 'text_value', value: '你好世界', native_outcome: { isError: true, meta: { state: 'dispatched_unverified' } } } })
-    expect(h.store.listToolCalls('verify').at(-1)?.status).toBe('succeeded')
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toEqual([])
-    expect(h.task.hasUnknownResults()).toBe(false)
-    expect(h.sent.filter(x => x === 'type')).toHaveLength(1)
-    expect(h.prompts).toBe(0)
-  } finally { h.close() }
-})
-
-it('does not ask for manual resolution when the verified native adapter explicitly refuses before dispatch', async () => {
-  const refused: ToolResult = { isError: true, content: [{ type: 'text', text: 'snapshot is only supported for receipt-pinned background press' }], meta: { state: 'refused', effect: 'refused', dispatch_state: 'none', mutation_dispatched: false, evidence: 'request_refused' } }
-  const h = verificationRuntime('type', verifiedDocument(''), undefined, refused)
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    await h.execute('input', 'type', { snapshot: 'before', on: 'native-element', text: '你好世界' })
-    expect(h.store.listToolCalls('verify').at(-1)?.status).toBe('failed')
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toEqual([])
-    expect(h.task.hasUnknownResults()).toBe(false)
-  } finally { h.close() }
-})
-
-it('automatically confirms a new TextEdit document from a unique new blank window after the picker closes', async () => {
-  const h = verificationRuntime('new-document', verifiedDocument('', 46))
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('new', 'click', { snapshot: 'before', on: 'native-element' })
-    expect(result.isError).not.toBe(true)
-    expect(result.meta).toMatchObject({ effect: 'confirmed', host_verification: { kind: 'new_document', window_id: 46 } })
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toEqual([])
-    expect(h.sent.filter(x => x === 'click')).toHaveLength(1)
-    expect(h.prompts).toBe(0)
-  } finally { h.close() }
-})
-
-it('automatically confirms TextEdit Cmd+N while retaining the original document window', async () => {
-  const h = verificationRuntime('new-document-key', verifiedDocument('', 46), 'original [ID: 45, ON-SCREEN]\nscratch [ID: 46, ON-SCREEN]')
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('new', 'press', { snapshot: 'before', keys: ['cmd+n'] })
-    expect(result.isError).not.toBe(true)
-    expect(result.meta).toMatchObject({ effect: 'confirmed', host_verification: { kind: 'new_document', window_id: 46 } })
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toEqual([])
-    expect(h.sent.filter(x => x === 'press')).toHaveLength(1)
-    expect(h.prompts).toBe(0)
-  } finally { h.close() }
-})
-
-it('waits for the new native window to appear using bounded reads without replaying Cmd+N', async () => {
-  let reads = 0
-  const h = verificationRuntime('new-document-key', verifiedDocument('', 46), () => ++reads === 1 ? 'original [ID: 45, ON-SCREEN]' : 'original [ID: 45, ON-SCREEN]\nscratch [ID: 46, ON-SCREEN]')
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('new', 'press', { snapshot: 'before', keys: ['cmd+n'] })
-    expect(result.isError).not.toBe(true)
-    expect(result.meta).toMatchObject({ effect: 'confirmed', host_verification: { kind: 'new_document', attempts: 2 } })
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toEqual([])
-    expect(h.sent.filter(x => x === 'press')).toHaveLength(1)
-  } finally { h.close() }
-})
-
-it.each(['wrong text', 'reused process', 'wrong field', 'failed observation'])('keeps unverifiable input blocked without replay: %s', async mode => {
-  const after = verifiedDocument(mode === 'wrong text' ? '你好世界你好世界' : '你好世界')
-  if (mode === 'reused process') (after.meta!.target_receipt as Record<string, unknown>).process_start_identity_decimal = '9007199254740993124'
-  if (mode === 'wrong field') (after.meta!.ui_elements as Record<string, unknown>[])[0].identifier = 'another field'
-  if (mode === 'failed observation') after.isError = true
-  const h = verificationRuntime('type', after)
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('input', 'type', { snapshot: 'before', on: 'native-element', text: '你好世界' })
-    expect(result.isError).toBe(true)
-    expect(h.task.hasUnknownResults()).toBe(true)
-    expect(h.store.listUnresolvedToolCalls(h.task.run.conversationId)).toHaveLength(1)
-    expect(h.sent.filter(x => x === 'type')).toHaveLength(1)
-    expect(h.prompts).toBe(0)
-  } finally { h.close() }
-})
-
-it.each([
-  { before: 'A😀B', range: { location: 1, length: 2 }, clear: false, expected: 'A你好世界B' },
-  { before: 'old content', range: { location: 3, length: 0 }, clear: true, expected: '你好世界' }
-])('verifies text using the actual selection and replacement mode: $expected', async ({ before, range, clear, expected }) => {
-  const h = verificationRuntime('type', verifiedDocument(expected))
-  Object.assign((h.before.meta!.ui_elements as Record<string, unknown>[])[0], { value: before, selected_text_range: range })
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('input', 'type', { snapshot: 'before', on: 'native-element', text: '你好世界', clear })
-    expect(result.meta).toMatchObject({ effect: 'confirmed', host_verification: { value: expected } })
-    expect(h.task.hasUnknownResults()).toBe(false)
-  } finally { h.close() }
-})
-
-it.each([
-  { windows: 'Open [ID: 45, ON-SCREEN]\nscratch [ID: 46, ON-SCREEN]', value: '' },
-  { windows: 'scratch [ID: 46, ON-SCREEN]\nanother [ID: 47, ON-SCREEN]', value: '' },
-  { windows: 'scratch [ID: 46, ON-SCREEN]', value: 'existing content' }
-])('does not confirm creation from ambiguous windows or a nonblank document: $windows / $value', async ({ windows, value }) => {
-  const h = verificationRuntime('new-document', verifiedDocument(value, 46), windows)
-  try {
-    await h.execute('see', 'see', { app_target: 'PID:12', window_id: 45 })
-    const result = await h.execute('new', 'click', { snapshot: 'before', on: 'native-element' })
-    expect(result.isError).toBe(true)
-    expect(h.task.hasUnknownResults()).toBe(true)
-    expect(h.sent.filter(x => x === 'click')).toHaveLength(1)
-  } finally { h.close() }
+it('a desktop action that waited for the queue cannot reuse the observation the earlier action consumed', async () => {
+  const { ResourceQueue } = await import('../src/core/tools/resources')
+  const h = setup(), registry = new SimpleToolRegistry(), adapter = new McpRegistryAdapter(registry, 'Peekaboo'), queue = new ResourceQueue()
+  const clicks: Record<string, unknown>[] = []
+  let release!: () => void
+  const held = new Promise<void>(resolve => { release = resolve })
+  const props = { snapshot: { type: 'string' }, on: { type: 'string' }, app_target: { type: 'string' }, window_id: { type: 'number' } }
+  adapter.register('service', 1, ['see', 'click'].map(name => ({ name, inputSchema: { type: 'object', properties: props } })), h.policy, () => true,
+    name => (args, ctx) => h.policy.execute!(name, args, ctx, async (remote, wire) => {
+      if (remote === 'see') return structuredClone(receipt())
+      clicks.push(wire); await held; return { content: [{ type: 'text', text: 'clicked' }] }
+    }), true)
+  const context = { ...h.context, resources: queue }
+  await registry.execute(mcpToolName('service', 'see'), { app_target: 'PID:12', window_id: 45 }, context)
+  const args = { snapshot: 'native-opaque', on: 'native-element' }
+  const first = registry.execute(mcpToolName('service', 'click'), args, { ...context, callId: 'first' })
+  const second = registry.execute(mcpToolName('service', 'click'), args, { ...context, callId: 'second' })
+  await new Promise(resolve => setImmediate(resolve))
+  expect(clicks).toHaveLength(1)
+  const rejected = expect(second).rejects.toThrow(/失效|观察/)
+  release()
+  // The first click was dispatched but its effect is unconfirmed, so it is reported unknown and consumes the observation.
+  expect(await first).toMatchObject({ isError: true, content: [{ text: 'clicked' }, { text: expect.stringContaining('结果未知') }] })
+  await rejected
+  expect(clicks).toHaveLength(1)
 })

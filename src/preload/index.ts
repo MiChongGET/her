@@ -58,6 +58,12 @@ const api: HerApi = {
   revokeConversationApprovals: createIpcProxy('her:task-revoke-approval', id => ipcRenderer.invoke('her:task-revoke-approval', id)),
   resolveUnknownToolCall: createIpcProxy('her:task-resolve-unknown', input => ipcRenderer.invoke('her:task-resolve-unknown', input)),
   continueTask: createIpcProxy('her:task-continue', input => ipcRenderer.invoke('her:task-continue', input)),
+  getQueue: createIpcProxy('her:queue-get', id => ipcRenderer.invoke('her:queue-get', id)),
+  cancelQueuedMessage: createIpcProxy('her:queue-cancel', (conversationId, requestId) => ipcRenderer.invoke('her:queue-cancel', conversationId, requestId)),
+  resumeQueue: createIpcProxy('her:queue-resume', id => ipcRenderer.invoke('her:queue-resume', id)),
+  compactConversation: createIpcProxy('her:compact', input => ipcRenderer.invoke('her:compact', input)),
+  stopCompaction: createIpcProxy('her:compact-stop', id => ipcRenderer.invoke('her:compact-stop', id)),
+  switchModel: createIpcProxy('her:model-switch', input => ipcRenderer.invoke('her:model-switch', input)),
   getArtifactPreview: createIpcProxy('her:artifact-preview', (id, conversationId) => ipcRenderer.invoke('her:artifact-preview', id, conversationId)),
   onRequestEvent: callback => {
     const listener = (_event: Electron.IpcRendererEvent, payload: RequestEvent) => callback(payload)

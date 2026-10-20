@@ -1,4 +1,6 @@
 import type { ActionAssessment, ApprovalRequest, ToolResult } from '../../shared/types'
+import type { ResourceQueue } from './resources'
+import type { ActionLedger } from './ledger'
 
 export interface ToolDefinition {
   name: string
@@ -25,6 +27,8 @@ export interface ToolExecutionContext {
   onApproval?: (request?: ApprovalRequest) => void
   observationValidated?: boolean
   validateRuntime?: () => boolean
+  resources?: ResourceQueue
+  ledger?: ActionLedger
 }
 
 export interface ToolExecutor {
@@ -40,6 +44,8 @@ export interface ToolRegistrationOptions {
   assess?: (args: Record<string, unknown>, context: ToolExecutionContext) => Promise<ActionAssessment>
   validateObservation?: (assessment: ActionAssessment, context: ToolExecutionContext) => boolean
   timeoutMs?: 60000 | 120000
+  /** Resource keys this call needs exclusively (`desktop`, `write:<target>`, `mcp:<service>`). */
+  resources?: (args: Record<string, unknown>, assessment: ActionAssessment) => string[]
 }
 
 export interface ToolRegistry {

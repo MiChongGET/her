@@ -9,9 +9,11 @@ import { mkdirSync } from 'node:fs'
 import { HerStore } from '../core/storage/store'
 import { ProfileService } from '../core/storage/profiles'
 import { ChatService, SYSTEM } from '../core/conversation/chat'
+import { AgentHost } from '../core/agent/host'
 import { FileAccessService } from '../core/files/access'
 import { registerFileTools } from '../core/files/tools'
 import { createDefaultRegistry } from '../core/tools/registry'
+import { combineRegistries } from '../core/tools/combine'
 import { secretCodec } from './credentials'
 import { registerIpc } from './ipc'
 import { clipboardWriteAllowed } from './ipc-policy'
@@ -57,8 +59,8 @@ function registerShortcut(accelerator: string, action = showWindow): boolean {
 }
 
 function desktopPreferences(input: { shortcut: string; stopShortcut: string; launchAtLogin: boolean }): DesktopSettings {
-  const previous = store!.getSettings()
-  const updated = { ...previous, ...input, shortcut: input.shortcut.trim(), stopShortcut: input.stopShortcut.trim() }
+  const previous = store!.getSettings() || { activeProfileId: null, shortcut: '', stopShortcut: '', launchAtLogin: false }
+  const updated: DesktopSettings = { ...previous, ...input, shortcut: input.shortcut.trim(), stopShortcut: input.stopShortcut.trim() }
   if (input.launchAtLogin && !app.isPackaged) throw new Error('登录自启需要安装版 Her，当前源码运行暂不支持。')
   updateShortcuts(previous, updated, { register: registerShortcut, unregister: key => globalShortcut.unregister(key), show: showWindow, stop: () => chat?.cancelActive() }, () => {
     if (input.launchAtLogin !== previous.launchAtLogin) app.setLoginItemSettings({ openAtLogin: input.launchAtLogin })
@@ -84,7 +86,11 @@ async function start(): Promise<void> {
   const dataDirectory = app.getPath('userData')
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 })
   store = new HerStore(join(dataDirectory, 'her.sqlite'))
-  if (!store.listConversations().length) store.createConversation()
+  if (!store.listConversations().length) {
+    // Create a default conversation on first launch
+    const { randomUUID } = await import('node:crypto')
+    store.createConversation(randomUUID(), randomUUID(), '新对话')
+  }
   const profiles = new ProfileService(store, secretCodec, lifetime.signal)
   const rendererDirectory = resolve(here, '../renderer')
   protocol.handle('her', request => {
@@ -140,16 +146,15 @@ async function start(): Promise<void> {
   registerPdfTools(registry, pdf)
   if (currentStore.artifactCleanupWarning) console.warn(currentStore.artifactCleanupWarning)
   if (currentStore.documentCleanupWarning) console.warn(currentStore.documentCleanupWarning)
-  chat = new ChatService(currentStore, profiles, event => {
-    if (!window.webContents.isDestroyed()) window.webContents.send('her:chat-event', event)
-  }, () => {
-    const settings = currentStore.getSettings()
-    return settings.systemPrompt || SYSTEM
-  }, undefined, registry, artifacts, () => Promise.allSettled(configs.list().filter(config => config.enabled).map(config => manager.connect(config.id))), event => {
-    if (!window.webContents.isDestroyed()) window.webContents.send('her:request-event', event)
-  }, files)
+
+  const host = new AgentHost(currentStore, profiles, dataDirectory, async (conversationId, signal) =>
+    combineRegistries(await manager.prepare(conversationId, signal)), (id, context) => artifacts.read(id, context), files, manager)
+  chat = new ChatService(currentStore, host,
+    event => { if (!window.isDestroyed()) window.webContents.send('her:chat-event', event) },
+    event => { if (!window.isDestroyed()) window.webContents.send('her:request-event', event) })
+
   shutdown = createShutdown({ lifetime, stop: () => chat!.shutdown(),
-    drain: () => Promise.allSettled([manager.shutdown(), dependencies.shutdown(), documents.shutdown(), pdf.shutdown(), artifacts.shutdown(), ...pending]),
+    drain: () => Promise.allSettled([chat!.shutdown(), manager.shutdown(), dependencies.shutdown(), documents.shutdown(), pdf.shutdown(), artifacts.shutdown(), ...pending]),
     forceClose: () => { manager.forceCloseOwnedProcesses(); dependencies.forceCloseOwnedProcesses() }, close: () => currentStore.close() })
   registerIpc({
     window, developmentUrl, store: currentStore, profiles, chat, configs, manager, dependencies, artifacts, files, lifetime: lifetime.signal, pending,
@@ -183,12 +188,12 @@ async function start(): Promise<void> {
   ]))
   tray.on('click', showWindow)
   const settings = store.getSettings()
-  if (!registerShortcut(settings.shortcut)) {
+  if (settings?.shortcut && !registerShortcut(settings.shortcut)) {
     void dialog.showMessageBox(window, {
       type: 'info', message: '唤出快捷键已被其他应用占用，请在桌面设置中更换。', buttons: ['知道了']
     })
   }
-  if (!registerShortcut(settings.stopShortcut, () => chat?.cancelActive())) {
+  if (settings?.stopShortcut && !registerShortcut(settings.stopShortcut, () => chat?.cancelActive())) {
     void dialog.showMessageBox(window, { type: 'info', message: '全局停止快捷键已被占用，请在桌面设置中更换；仍可使用停止按钮。', buttons: ['知道了'] })
   }
   if (developmentUrl) {

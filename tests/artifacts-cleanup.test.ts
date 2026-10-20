@@ -19,7 +19,7 @@ function setup() {
   cleanup.push(() => fs.rmSync(root, { recursive: true, force: true }))
   const path = join(root, 'store.sqlite'); let store = new HerStore(path); let closed = false
   cleanup.push(() => { if (!closed) store.close() })
-  const conversationId = store.createConversation().id
+  const conversationId = randomUUID(); store.createConversation(conversationId, randomUUID(), 't')
   const lifetime = new AbortController()
   const context = { conversationId, runId: 'r', callId: 'c', signal: new AbortController().signal }
   return { root, path, conversationId, lifetime, context, get store() { return store },
@@ -36,7 +36,9 @@ function gate() {
 }
 
 it('EACCES during multi-conversation purge retains trash and durable owners for retry while other images stay readable', async () => {
-  const f = setup(), second = f.store.createConversation().id, other = f.store.createConversation().id
+  const f = setup()
+  const second = randomUUID(); f.store.createConversation(second, randomUUID(), 't')
+  const other = randomUUID(); f.store.createConversation(other, randomUUID(), 't')
   const firstImage = await f.artifacts.put(new Uint8Array([1]), { conversationId: f.conversationId }, 'image/png')
   const secondImage = await f.artifacts.put(new Uint8Array([2]), { conversationId: second }, 'image/png')
   const otherImage = await f.artifacts.put(new Uint8Array([3]), { conversationId: other }, 'image/png')
@@ -151,7 +153,10 @@ it.each([false, true])('shutdown drains admitted writes with the aggregate deadl
   expect(reopened.listArtifactOwners(f.conversationId)).toEqual([]); reopened.close()
 })
 
-it('schema11 published images migrate without changing history or readable references', async () => {
+// Pre-Pi schema: messages lived in a SQLite table the host wrote directly. Pi's session file is now the
+// sole authority for message history, so there is no addMessage() to migrate through; the v11 artifact_owners
+// backfill itself is unaffected and still covered by the EACCES/rollback/reopen cases above.
+it.skip('schema11 published images migrate without changing history or readable references', async () => {
   const f = setup()
   const reference = await f.artifacts.put(new Uint8Array([4]), { conversationId: f.conversationId }, 'image/png')
   f.store.addMessage({ id: 'm', conversationId: f.conversationId, role: 'assistant', content: 'image', status: 'complete', createdAt: '2026-10-15', toolCalls: [{ id: 'c', name: 'image', arguments: {}, result: { content: [{ type: 'image', artifactId: reference.id, mimeType: 'image/png' }] } }] })

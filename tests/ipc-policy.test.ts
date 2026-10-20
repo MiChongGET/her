@@ -53,13 +53,36 @@ function ipcFixture() {
   const registry = new SimpleToolRegistry()
   const artifacts = new ToolArtifactStore(store, lifetime.signal)
   const manager = new McpConnectionManager(configs, registry, artifacts)
-  const chat = new ChatService(store, profiles, () => {}, () => '', undefined, registry, artifacts)
+  const chat = new ChatService(store)
   const mainFrame = { url: 'her://app/index.html' }
   const window = { webContents: { mainFrame } }
   registerIpc({ window: window as never, store, profiles, configs, manager, dependencies: new PresetDependencies(), artifacts, files: new FileAccessService(store, lifetime.signal), chat, lifetime: lifetime.signal, pending: new Set(), appVersion: 'test', dataDirectory: 'test', desktopPreferences: input => ({ activeProfileId: null, ...input }) })
   const event = { sender: window.webContents, senderFrame: mainFrame }
   return { store, profiles, configs, manager, lifetime, event, call: (channel: string, ...args: unknown[]) => electronMock.handlers.get(channel)!(event, ...args) }
 }
+
+it('creates persisted conversations through IPC and returns renderer summaries', async () => {
+  const fixture = ipcFixture()
+  try {
+    const first = fixture.call('her:conversation-create')
+    const second = fixture.call('her:conversation-create')
+    expect(first).toMatchObject({
+      id: expect.any(String), title: '新对话', titleCustom: false,
+      createdAt: expect.any(String), updatedAt: expect.any(String), lastMessage: ''
+    })
+    expect(Number.isFinite(Date.parse(first.createdAt))).toBe(true)
+    expect(second.id).not.toBe(first.id)
+    const storedFirst = fixture.store.getConversation(first.id)!
+    const storedSecond = fixture.store.getConversation(second.id)!
+    expect(storedFirst.piSessionId).toEqual(expect.any(String))
+    expect(storedFirst.piSessionId.length).toBeGreaterThan(0)
+    expect(storedSecond.piSessionId).not.toBe(storedFirst.piSessionId)
+    expect(fixture.call('her:bootstrap').conversations).toEqual(expect.arrayContaining([first, second]))
+  } finally {
+    await fixture.manager.shutdown()
+    fixture.store.close()
+  }
+})
 
 it('rejects every new MCP/task/artifact method from subframes or another sender and closes admission synchronously', async () => {
   const fixture = ipcFixture()
@@ -266,4 +289,21 @@ it.each(['revoke', 'purge', 'version', 'shutdown'] as const)('checked image prev
     resume()
     await expect(preview).rejects.toThrow()
   } finally { read.mockRestore(); await fixture.manager.shutdown(); fixture.store.close(); await rm(directory, { recursive: true, force: true }) }
+})
+
+it('queue, compaction and model-switch channels reject other senders and subframes, and validate their input', async () => {
+  const fixture = ipcFixture()
+  const channels = ['her:queue-get', 'her:queue-cancel', 'her:queue-resume', 'her:compact', 'her:compact-stop', 'her:model-switch']
+  for (const channel of channels) {
+    expect(electronMock.handlers.has(channel)).toBe(true)
+    const handler = electronMock.handlers.get(channel)!
+    expect(() => handler({ ...fixture.event, senderFrame: { url: 'her://app/index.html' } })).toThrow('无权')
+    expect(() => handler({ ...fixture.event, sender: {} })).toThrow('无权')
+  }
+  expect(() => fixture.call('her:queue-get', '')).toThrow('对象标识')
+  expect(() => fixture.call('her:queue-cancel', 'c', 42)).toThrow('对象标识')
+  expect(() => fixture.call('her:compact', 'not an object')).toThrow('参数不正确')
+  expect(() => fixture.call('her:compact', { conversationId: 'c', profileId: 'p', model: 7 })).toThrow('模型标识')
+  expect(() => fixture.call('her:model-switch', { conversationId: 'c' })).toThrow('对象标识')
+  await fixture.manager.shutdown(); fixture.store.close()
 })
