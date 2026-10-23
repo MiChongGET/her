@@ -13,17 +13,21 @@ async function launch(dataDirectory: string): Promise<{ app: ElectronApplication
   const executablePath = process.env.HER_TEST_APP_EXECUTABLE
   const app = await _electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [resolve('.')] }), env })
   const page = await app.firstWindow()
-  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
   return { app, page }
 }
 
 async function saveProfile(page: Page, input: { name: string; protocol: 'openai' | 'anthropic' | 'openai-responses'; baseUrl: string; model: string }) {
-  await page.getByRole('button', { name: '设置', exact: true }).click()
+  await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
   await page.getByRole('button', { name: '添加服务', exact: true }).click()
   await page.getByLabel('服务名称', { exact: true }).fill(input.name)
   await page.getByLabel('协议', { exact: true }).selectOption(input.protocol)
   await page.getByLabel('Base URL', { exact: true }).fill(input.baseUrl)
   await page.getByLabel('Model ID', { exact: true }).fill(input.model)
+  await page.getByLabel('认证方式', { exact: true }).selectOption('none')
+  await page.getByText('高级选项', { exact: true }).click()
+  await page.getByLabel('上下文容量', { exact: true }).fill('128000')
+  await page.getByText('高级选项', { exact: true }).click()
   await page.getByRole('button', { name: '保存服务', exact: true }).click()
   await expect(page.getByText('服务已保存', { exact: true })).toBeVisible()
 }
@@ -85,9 +89,9 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
       name: '本地 OpenAI 验收', protocol: 'openai', baseUrl: provider.baseUrl, model: 'fixture-openai'
     })
     await page.getByRole('button', { name: '测试文字', exact: true }).click()
-    await expect(page.getByText('文字测试：文字流式连接成功。', { exact: true })).toBeVisible()
+    await expect(page.getByText(/文字测试：已收到文字增量/)).toBeVisible()
     await page.getByRole('button', { name: '测试工具', exact: true }).click()
-    await expect(page.getByText(/工具测试：已验证完整工具调用/)).toBeVisible()
+    await expect(page.getByText(/工具测试：已验证指定工具调用及参数/)).toBeVisible()
     const firstBootstrap = await page.evaluate(() => window.her.getBootstrap())
     expect(firstBootstrap.profiles[0]).not.toHaveProperty('apiKey')
     expect(firstBootstrap.profiles[0]).not.toHaveProperty('customHeaders')
@@ -96,7 +100,7 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
     await send(page, '今天开始开发 Her 了。')
     await expect(page.locator('article.message-assistant[data-status="complete"]')).toContainText('我在，慢慢说。')
-    const conversationId = (await page.evaluate(() => window.her.getBootstrap())).conversations[0].id
+    const conversationId = (await page.evaluate(() => window.her.getBootstrap())).dailyConversationId
     expect(provider.requests[0].path).toBe('/proxy/v1/chat/completions')
 
     await saveProfile(page, {
@@ -104,15 +108,15 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
     })
     await page.getByRole('button', { name: '设为当前', exact: true }).click()
     await page.getByRole('button', { name: '测试文字', exact: true }).click()
-    await expect(page.getByText('文字测试：文字流式连接成功。', { exact: true })).toBeVisible()
+    await expect(page.getByText(/文字测试：已收到文字增量/)).toBeVisible()
     await page.getByRole('button', { name: '测试工具', exact: true }).click()
-    await expect(page.getByText(/工具测试：已验证完整工具调用/)).toBeVisible()
+    await expect(page.getByText(/工具测试：已验证指定工具调用及参数/)).toBeVisible()
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
     await send(page, '换个模型继续刚才的话题。')
     await expect(page.locator('article.message-assistant[data-status="complete"]')).toHaveCount(2)
     const claudeRequest = provider.requests.findLast(request => request.path.endsWith('/messages') && request.body.tools && !request.body.tool_choice)
-    expect(claudeRequest?.body.system).toEqual(expect.any(String))
-    expect((claudeRequest?.body.messages as { content: string }[]).some(message => message.content === '今天开始开发 Her 了。')).toBe(true)
+    expect(claudeRequest?.body.system).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text', text: expect.any(String) })]))
+    expect(JSON.stringify(claudeRequest?.body.messages)).toContain('今天开始开发 Her 了。')
 
     await send(page, '这次请慢一点说。')
     await expect(page.locator('article.message-assistant[data-status="streaming"]')).toContainText('我在，')
@@ -127,14 +131,14 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
     running = await launch(dataDirectory)
     app = running.app
     page = running.page
-    await expect(page.getByRole('button', { name: '今天开始开发 Her 了。', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '日常', exact: true })).toHaveAttribute('aria-current', 'page')
     const afterRestart = await page.evaluate(id => window.her.getMessages(id), conversationId)
     expect(afterRestart.map(message => ({ id: message.id, content: message.content, status: message.status })))
       .toEqual(beforeRestart.map(message => ({ id: message.id, content: message.content, status: message.status })))
     const restored = await page.evaluate(() => window.her.getBootstrap())
     expect(restored.profiles).toHaveLength(2)
-    expect(restored.settings.activeProfileId).toBe(restored.profiles[1].id)
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    expect(restored.settings.activeProfileId).toBe(restored.profiles.find(profile => profile.name === '本地 Claude 验收')!.id)
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('tab', { name: '桌面偏好', exact: true }).click()
     if (process.env.HER_TEST_APP_EXECUTABLE) {
       // Package preference persistence is real; the OS login-item boundary is test-local.
@@ -162,7 +166,7 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close() })
     expect(await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(false)
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].show() })
-    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
   } finally {
     await app?.close()
     await provider.close()
@@ -170,7 +174,7 @@ test('desktop: both HTTP protocols, capability probes, stream, cancel, restart a
   }
 })
 
-test('desktop: failed model response can be retried without duplicate user history', async () => {
+test('desktop: retry creates a new attempt and preserves the original failure', async () => {
   const dataDirectory = mkdtempSync(join(tmpdir(), 'her-retry-'))
   const provider = await startMockProvider()
   let app: ElectronApplication | undefined
@@ -184,7 +188,7 @@ test('desktop: failed model response can be retried without duplicate user histo
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
     await send(page, '这条消息只应该保存一次。')
     await expect(page.locator('article.message-assistant[data-status="failed"]')).toContainText('HTTP 401')
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByLabel('Model ID', { exact: true }).fill('fixture-openai')
     await page.getByRole('button', { name: '保存服务', exact: true }).click()
     await expect(page.getByText('服务已保存', { exact: true })).toBeVisible()
@@ -192,10 +196,13 @@ test('desktop: failed model response can be retried without duplicate user histo
     await page.getByRole('button', { name: '重试', exact: true }).click()
     await expect(page.locator('article.message-assistant[data-status="complete"]')).toContainText('我在，慢慢说。')
     const state = await page.evaluate(() => window.her.getBootstrap())
-    const messages = await page.evaluate(id => window.her.getMessages(id), state.conversations[0].id)
-    expect(messages).toHaveLength(2)
+    const messages = await page.evaluate(id => window.her.getMessages(id), state.dailyConversationId)
+    expect(messages).toHaveLength(4)
     expect(messages[0].content).toBe('这条消息只应该保存一次。')
-    expect(messages[1].model).toBe('fixture-openai')
+    expect(messages[1].status).toBe('failed')
+    expect(messages[2].content).toBe(messages[0].content)
+    expect(messages[3].model).toBe('fixture-openai')
+    expect(messages[3].status).toBe('complete')
   } finally {
     await app?.close()
     await provider.close()
@@ -215,50 +222,58 @@ test('desktop: conversations can be renamed, trashed, restored and permanently d
       name: '回收站验收', protocol: 'openai', baseUrl: provider.baseUrl, model: 'fixture-openai'
     })
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.getByRole('button', { name: '另开一个话题' }).first().click()
+    const conversationId = (await page.evaluate(() => window.her.listWorkItems()))[0].conversation.id
     await send(page, '这段对话要经历回收站。')
     await expect(page.locator('article.message-assistant[data-status="complete"]')).toContainText('我在，慢慢说。')
-    const conversationId = (await page.evaluate(() => window.her.getBootstrap())).conversations[0].id
 
     await page.getByRole('button', { name: '重命名对话', exact: true }).click()
     await page.getByLabel('对话标题', { exact: true }).fill('周报草稿')
     await page.getByLabel('对话标题', { exact: true }).press('Enter')
     await expect(page.getByRole('heading', { name: '周报草稿', exact: true })).toBeVisible()
 
-    await page.getByRole('button', { name: '周报草稿', exact: true }).hover()
-    await page.getByRole('button', { name: '删除对话 周报草稿', exact: true }).click()
+    await page.getByRole('button', { name: '返回话题' }).click()
+    await page.getByLabel('周报草稿的更多操作').click()
+    await page.getByRole('button', { name: '移到回收站' }).click()
     await expect(page.getByRole('button', { name: '周报草稿', exact: true })).toHaveCount(0)
-    const afterTrash = await page.evaluate(() => window.her.getBootstrap())
-    expect(afterTrash.conversations.map(item => item.id)).not.toContain(conversationId)
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    const afterTrash = await page.evaluate(() => window.her.listWorkItems())
+    expect(afterTrash.map(item => item.conversation.id)).not.toContain(conversationId)
     await app.close()
     app = undefined
 
     running = await launch(dataDirectory)
     app = running.app
     page = running.page
-    await page.getByRole('button', { name: '回收站', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '回收站', exact: true }).click()
     const trash = page.getByRole('dialog', { name: '回收站', exact: true })
     await expect(trash.getByText('周报草稿', { exact: true })).toBeVisible()
     await trash.getByRole('button', { name: '恢复 周报草稿', exact: true }).click()
-    await expect(trash.getByText('回收站是空的。', { exact: true })).toBeVisible()
+    await expect(trash.getByText('回收站是空的', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: '关闭回收站', exact: true }).click()
-    await expect(page.getByRole('button', { name: '周报草稿', exact: true })).toBeVisible()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.getByRole('button', { name: '周报草稿', exact: true }).click()
+    await expect(page.getByRole('heading', { name: '周报草稿', exact: true })).toBeVisible()
     const restored = await page.evaluate(id => window.her.getMessages(id), conversationId)
     expect(restored.map(message => message.content)).toEqual(['这段对话要经历回收站。', '我在，慢慢说。'])
 
-    await page.getByRole('button', { name: '周报草稿', exact: true }).hover()
-    await page.getByRole('button', { name: '删除对话 周报草稿', exact: true }).click()
-    await page.getByRole('button', { name: '回收站', exact: true }).click()
+    await page.getByRole('button', { name: '返回话题' }).click()
+    await page.getByLabel('周报草稿的更多操作').click()
+    await page.getByRole('button', { name: '移到回收站' }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '回收站', exact: true }).click()
     await trash.getByRole('button', { name: '永久删除 周报草稿', exact: true }).click()
     await trash.getByRole('button', { name: '确认永久删除', exact: true }).click()
-    await expect(trash.getByText('回收站是空的。', { exact: true })).toBeVisible()
+    await expect(trash.getByText('回收站是空的', { exact: true })).toBeVisible()
     await app.close()
     app = undefined
 
     running = await launch(dataDirectory)
     app = running.app
     page = running.page
-    const final = await page.evaluate(() => window.her.getBootstrap())
-    expect(final.conversations.map(item => item.id)).not.toContain(conversationId)
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    const final = await page.evaluate(() => window.her.listWorkItems())
+    expect(final.map(item => item.conversation.id)).not.toContain(conversationId)
     expect(await page.evaluate(() => window.her.listTrashedConversations())).toEqual([])
     await expect(page.evaluate(id => window.her.getMessages(id), conversationId)).rejects.toThrow()
   } finally {
@@ -282,10 +297,10 @@ test('desktop: OpenAI Responses protocol with connection tests and message excha
     })
 
     await page.getByRole('button', { name: '测试文字', exact: true }).click()
-    await expect(page.getByText('文字测试：文字流式连接成功。', { exact: true })).toBeVisible()
+    await expect(page.getByText(/文字测试：已收到文字增量/)).toBeVisible()
 
     await page.getByRole('button', { name: '测试工具', exact: true }).click()
-    await expect(page.getByText(/工具测试：已验证完整工具调用/)).toBeVisible()
+    await expect(page.getByText(/工具测试：已验证指定工具调用及参数/)).toBeVisible()
 
     const bootstrap = await page.evaluate(() => window.her.getBootstrap())
     expect(bootstrap.profiles[0].models[0].tests.chat.status).toBe('passed')
@@ -298,9 +313,9 @@ test('desktop: OpenAI Responses protocol with connection tests and message excha
     const responsesRequest = provider.requests.find(request => request.path.endsWith('/responses') && request.body.tools && !request.body.tool_choice)
     expect(responsesRequest).toBeDefined()
     expect(responsesRequest?.path).toBe('/proxy/v1/responses')
-    expect(responsesRequest?.body.instructions).toEqual(expect.any(String))
+    expect(responsesRequest?.body.input).toEqual(expect.arrayContaining([expect.objectContaining({ role: 'system', content: expect.any(String) })]))
     expect(responsesRequest?.body.input).toEqual(expect.any(Array))
-    expect(responsesRequest?.body).not.toHaveProperty('max_output_tokens')
+    expect(responsesRequest?.body.max_output_tokens).toBeGreaterThan(0)
     expect(responsesRequest?.body).not.toHaveProperty('temperature')
     expect(responsesRequest?.body).not.toHaveProperty('top_p')
   } finally {
@@ -447,20 +462,20 @@ test('desktop: custom system prompt configuration', async () => {
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
 
     // 打开设置 → 系统提示词 tab
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统提示词', exact: true }).click()
 
     // 验证提示词输入框已显示
     const promptTextarea = page.getByLabel('系统提示词', { exact: true })
     await expect(promptTextarea).toBeVisible()
 
-    // 验证默认提示词在 placeholder 中（初始 value 为空）
-    const placeholder = await promptTextarea.getAttribute('placeholder')
-    expect(placeholder).toBeTruthy()
-    expect(placeholder).not.toBe('加载中…')
+    // 默认原文直接载入，允许在原文上修改。
+    const defaultPrompt = await page.evaluate(() => window.her.getDefaultSystemPrompt())
+    await expect(promptTextarea).toHaveValue(defaultPrompt)
 
     // 编辑提示词
-    const customPrompt = '你是一个测试助手，请在回答前加上"[测试]"前缀。'
+    const customInstruction = '请在回答前加上 SYSTEM_PROMPT_EDIT_MARKER 前缀。'
+    const customPrompt = `${defaultPrompt}\n${customInstruction}`
     await promptTextarea.fill(customPrompt)
 
     // 保存
@@ -476,26 +491,29 @@ test('desktop: custom system prompt configuration', async () => {
     await expect(firstReply).toHaveAttribute('data-status', 'complete', { timeout: 10000 })
     // 验证有回复内容（具体内容由 mock provider 决定）
     await expect(firstReply.locator('.message-body')).not.toBeEmpty()
+    expect(JSON.stringify(provider.requests.at(-1)?.body)).toContain(customInstruction)
 
     // 恢复默认提示词
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统提示词', exact: true }).click()
+    await expect(promptTextarea).toHaveValue(customPrompt)
     await page.getByRole('button', { name: '恢复默认', exact: true }).click()
 
-    // 验证恢复后输入框为空（使用默认值）
-    const restoredPrompt = await promptTextarea.inputValue()
-    expect(restoredPrompt).toBe('')
+    // 恢复后仍显示可编辑的默认原文。
+    await expect(promptTextarea).toHaveValue(defaultPrompt)
 
-    // 保存并发起新对话
+    // 保存后在已有对话中发送，验证下一次请求使用默认提示词。
     await page.getByRole('button', { name: '保存提示词', exact: true }).click()
     await expect(page.getByText('系统提示词已保存', { exact: true })).toBeVisible()
+    expect(await page.evaluate(() => window.her.getSystemPrompt())).toBe('')
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
 
-    await page.getByRole('button', { name: '新对话', exact: true }).click()
     await send(page, '再次你好')
     const secondReply = page.locator('article.message-assistant').last()
     await expect(secondReply).toHaveAttribute('data-status', 'complete', { timeout: 10000 })
     await expect(secondReply.locator('.message-body')).not.toBeEmpty()
+    expect(JSON.stringify(provider.requests.at(-1)?.body)).not.toContain(customInstruction)
+    expect(JSON.stringify(provider.requests.at(-1)?.body)).toContain('你是 Samantha')
 
   } finally {
     await app?.close()

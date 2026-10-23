@@ -22,7 +22,7 @@ async function setup(protocol: Protocol, scenario: Scenario = 'text', apiKey = '
   }, lifetime.signal)
   const profile = await profiles.save({
     name: 'Connection fixture', protocol, baseUrl: server.baseUrl + '/prefix/v1',
-    model: 'test-model', authMethod: apiKey ? 'api-key' : 'none', apiKey, customHeaders: headers
+    model: 'test-model', contextWindow: 128000, authMethod: apiKey ? 'api-key' : Object.keys(headers).length ? 'headers' : 'none', apiKey, customHeaders: headers
   })
   return { server, store, profiles, profile, lifetime,
     run: (kind: TestKind = 'chat') => testConnection(profiles, profile.id, kind) }
@@ -45,8 +45,6 @@ describe('real model connection probes', () => {
     })
 
     for (const scenario of ['http-error', 'invalid-content-type', 'missing-finish', 'missing-terminal', 'truncated', 'malformed-json', 'tool-without-calls', 'empty-text'] as const) {
-      // A Completions finish_reason is its normal completion marker; [DONE] is not exposed by the SDK.
-      if (protocol === 'openai' && scenario === 'missing-terminal') continue
       if (protocol !== 'openai' && scenario === 'missing-finish') continue
       if (protocol === 'openai-responses' && scenario === 'tool-without-calls') continue
       it(`${protocol}: rejects ${scenario} instead of reporting configuration success`, async () => {

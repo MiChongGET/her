@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync, writeFileSync, chmodSync } from 'node:fs'
+import { readdirSync, readFileSync, writeFileSync, chmodSync, existsSync, unlinkSync } from 'node:fs'
 import { join } from 'node:path'
 import { startFixtureServer } from './pi-sdk/wire'
 import { harness, harnessCleanup } from './helpers/host-harness'
+import { AgentHost } from '../src/core/agent/host'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
@@ -10,7 +11,7 @@ afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCle
 async function withHistory() {
   const s = await startFixtureServer('openai', ['text', 'text', 'text']); cleanup.push(s.close)
   const f = harness()
-  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
   const sent = await f.send(f.id, p.id, 'hello')
   await expect.poll(() => f.finished(sent.requestId)?.state, { timeout: 10_000 }).toBe('completed')
   const dir = join(f.directory, 'pi', 'sessions', f.id), file = join(dir, readdirSync(dir)[0])
@@ -83,12 +84,31 @@ describe('a damaged session file', () => {
 })
 
 describe('a single bad line inside an otherwise valid session', () => {
-  // Pi skips malformed lines when it loads a file. That is current SDK behaviour, pinned here rather than relied on silently.
-  it('is skipped by Pi: the rest of the history is read and the file is not rewritten', async () => {
-    const { f, file, good } = await withHistory()
+  it('is quarantined before Pi can silently skip the damaged line', async () => {
+    const { s, f, p, file, good } = await withHistory()
     const lines = good.split('\n'); lines.splice(3, 0, '{not json')
     writeFileSync(file, lines.join('\n')); const before = readFileSync(file)
-    expect((await f.chat.getMessages(f.id)).map(message => message.role)).toEqual(['user', 'assistant'])
+    await expect(f.chat.getMessages(f.id)).rejects.toThrow('已损坏')
+    expect(existsSync(join(f.directory, 'pi', 'quarantine', f.id))).toBe(true)
+    const requests = s.requests.length
+    await expect(f.send(f.id, p.id, 'must not send')).rejects.toThrow('已损坏')
+    expect(s.requests).toHaveLength(requests)
+    const restarted = new AgentHost(f.store, f.profiles, f.directory)
+    await restarted.ready()
+    await expect(restarted.getMessages(f.id)).rejects.toThrow('已损坏')
+    await restarted.stopAll()
     expect(readFileSync(file).equals(before)).toBe(true)
+    writeFileSync(file, good)
+    expect((await f.chat.getMessages(f.id)).map(message => message.role)).toEqual(['user', 'assistant'])
+    expect(existsSync(join(f.directory, 'pi', 'quarantine', f.id))).toBe(false)
   })
+})
+
+it('does not replace a quarantined session when its damaged file goes missing', async () => {
+  const { f, file } = await withHistory()
+  writeFileSync(file, 'garbage')
+  await expect(f.chat.getMessages(f.id)).rejects.toThrow('已损坏')
+  unlinkSync(file)
+  await expect(f.chat.getMessages(f.id)).rejects.toThrow('已损坏')
+  expect(readdirSync(join(f.directory, 'pi', 'sessions', f.id))).toEqual([])
 })

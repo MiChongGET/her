@@ -13,6 +13,7 @@ import { PEEKABOO_ARGS, PEEKABOO_ENV, PEEKABOO_SHA256, PEEKABOO_VERSION, PRESETS
 import markitdownVersions from './markitdown-versions.json'
 import { MARKITDOWN_ENV, MARKITDOWN_VERSION } from './presets'
 import webReleases from './web-release-integrity.json'
+import webRequestPatch from '../../../resources/mcp-web-dependencies/her-request-patch.json'
 
 type ProbeRunner = (path: string, args: string[]) => Promise<string>
 interface DependencyOptions {
@@ -119,7 +120,7 @@ export class PresetDependencies {
       return checks
     }
     const checks: DependencyCheck[] = []
-    const components = presetId === 'open-websearch' ? [['Node.js', 'node', 20, 18, 1] as const] : [['Node.js', 'node', 20, 0, 0] as const]
+    const components = [['Node.js', 'node', 20, 18, 1] as const]
     for (const [component, command, major, minor, patch] of components) {
       const resolvedPath = await this.executable([join(this.home, '.local/bin', command), `/opt/homebrew/bin/${command}`, `/usr/local/bin/${command}`])
       if (!resolvedPath) { checks.push({ component, status: 'missing', message: preset.guidance }); continue }
@@ -130,20 +131,16 @@ export class PresetDependencies {
       } catch { this.cancelled.signal.throwIfAborted(); checks.push({ component, status: 'incompatible', message: preset.guidance }) }
     }
     checks.push({ component: 'npm', status: await this.executable(['/opt/homebrew/bin/npm', '/usr/local/bin/npm']) ? 'ready' : 'missing', message: 'npm 随 Node.js 安装；GUI 不使用终端 PATH，不会自动 npx 下载。' })
-    if (presetId === 'playwright' || presetId === 'open-websearch') {
-      const names = presetId === 'playwright' ? ['@playwright/mcp', 'playwright', 'playwright-core'] as const : ['open-websearch'] as const
+    if (presetId === 'open-websearch') {
+      const names = ['open-websearch'] as const
       for (const name of names) {
         const root = join(this.webRoot(), 'node_modules', name)
         let present = false, valid = false
         try { await access(join(root, 'package.json')); present = true; valid = await this.verifyPackage(root, name) } catch { /* report missing or incompatible below */ }
         checks.push({ component: name, status: valid ? 'ready' : present ? 'incompatible' : 'missing', version: webReleases[name].version,
-          ...(valid ? { resolvedPath: join(root, webReleases[name].cli) } : {}), message: valid ? '固定发布包内容校验通过；元数据就绪不代表浏览器已连接。' : preset.guidance })
+          ...(valid ? { resolvedPath: join(root, webReleases[name].cli) } : {}), message: valid ? '固定发布包内容校验通过；实际检索结果以工具调用为准。' : preset.guidance })
       }
     } else checks.push({ component: preset.name, status: 'incompatible', message: preset.guidance + ' 当前仅提供依赖诊断，执行适配尚未接入。' })
-    if (presetId === 'playwright') {
-      checks.push({ component: 'Chrome', status: await this.executable(['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']) ? 'ready' : 'missing', message: '安装 Google Chrome。' })
-      checks.push({ component: 'Playwright 扩展', status: 'permission_required', message: '安装官方 Playwright 扩展并授权连接；只读检查不会启动浏览器或触发配对。' })
-    }
     this.cancelled.signal.throwIfAborted()
     return checks
   }
@@ -174,18 +171,21 @@ export class PresetDependencies {
     this.cancelled.signal.throwIfAborted()
   }
   webRoot(): string { return join(this.home, '.local/share/her/dependencies/web-tools-v1') }
-  async webPreset(presetId: 'playwright' | 'open-websearch'): Promise<SaveMcpServiceInput> {
+  async webRequestConfinement(): Promise<boolean> {
+    try { return await webPackageHash(join(this.webRoot(), 'node_modules/open-websearch')) === webRequestPatch.patchedTreeSha256 } catch { return false }
+  }
+  async webPreset(presetId: 'open-websearch'): Promise<SaveMcpServiceInput> {
     const checks = await this.checkPresetDependencies(presetId, '')
-    const required = checks.filter(check => !['Chrome', 'Playwright 扩展', 'npm'].includes(check.component))
+    const required = checks.filter(check => check.component !== 'npm')
     if (required.some(check => check.status !== 'ready')) throw new Error(required.find(check => check.status !== 'ready')!.message)
     const node = required.find(check => check.component === 'Node.js')!.resolvedPath!
-    const cli = required.find(check => check.component === (presetId === 'playwright' ? '@playwright/mcp' : 'open-websearch'))!.resolvedPath!
+    const cli = required.find(check => check.component === 'open-websearch')!.resolvedPath!
     const preset = PRESETS.find(item => item.id === presetId)!
     return { name: preset.name, presetId, enabled: preset.defaultEnabled, transport: 'stdio', command: node,
-      args: presetId === 'playwright' ? [cli, '--extension', '--no-webmcp', '--snapshot-mode', 'none', '--output-dir', join(this.webRoot(), 'browser-output')] : [cli],
-      secretValues: presetId === 'playwright' ? {} : OPEN_WEBSEARCH_ENV }
+      args: [cli],
+      secretValues: OPEN_WEBSEARCH_ENV }
   }
-  async verifyWebPreset(config: McpTransportConfig & { env?: Record<string, string> }, presetId: 'playwright' | 'open-websearch'): Promise<void> {
+  async verifyWebPreset(config: McpTransportConfig & { env?: Record<string, string> }, presetId: 'open-websearch'): Promise<void> {
     this.cancelled.signal.throwIfAborted()
     const expected = await this.webPreset(presetId)
     if (config.transport !== 'stdio' || !config.command || !isAbsolute(config.command) || config.cwd ||
@@ -206,6 +206,11 @@ async function verifyWebPackage(root: string, name: string): Promise<boolean> {
   if (!release) return false
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
   if (metadata.name !== name || metadata.version !== release.version) return false
+  const digest = await webPackageHash(root)
+  return digest === release.sha256 || name === 'open-websearch' && digest === webRequestPatch.patchedTreeSha256
+}
+
+async function webPackageHash(root: string): Promise<string> {
   const rows: string[] = []
   async function visit(directory: string, prefix: string): Promise<void> {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -218,5 +223,5 @@ async function verifyWebPackage(root: string, name: string): Promise<boolean> {
     }
   }
   await visit(root, '')
-  return createHash('sha256').update(rows.sort().join('')).digest('hex') === release.sha256
+  return createHash('sha256').update(rows.sort().join('')).digest('hex')
 }

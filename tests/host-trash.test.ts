@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { startFixtureServer, type Scenario } from './pi-sdk/wire'
-import { harness, harnessCleanup } from './helpers/host-harness'
+import { approveNextTool, harness, harnessCleanup } from './helpers/host-harness'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
@@ -11,7 +11,7 @@ async function server(scenario: Scenario | Scenario[], options: Parameters<typeo
   const s = await startFixtureServer('openai', scenario, options); cleanup.push(s.close); return s
 }
 async function profile(f: ReturnType<typeof harness>, baseUrl: string) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
 }
 function gated() {
   let release!: () => void
@@ -59,6 +59,7 @@ describe('trashing a conversation', () => {
       { assess: async () => ({ effect: 'read', target: 'x', summary: 'act' }), deferDispatch: true })
     const f = harness(undefined, async () => registry.snapshot()), p = await profile(f, s.baseUrl)
     const running = f.send(f.id, p.id, 'go')
+    await approveNextTool(f.chat, f.id)
     await expect.poll(() => validateRuntime !== undefined, { timeout: 10_000 }).toBe(true)
     expect(validateRuntime!()).toBe(true)
     await f.chat.trashConversation(f.id)
@@ -78,6 +79,23 @@ describe('trashing a conversation', () => {
 })
 
 describe('restoring a conversation', () => {
+  it('restored_daily_does_not_replace_current_daily', async () => {
+    const f = harness()
+    const old = f.store.ensureDailyConversation()
+    await f.chat.trashConversation(old.id)
+    const trashed = f.store.getConversation(old.id)
+    const current = f.store.ensureDailyConversation()
+    expect(current.id).not.toBe(old.id)
+    expect(f.store.getConversation(old.id)).toEqual(trashed)
+    expect(f.store.getTopicInfo(old.id)).toBeNull()
+    f.chat.restoreConversation(old.id)
+    expect(f.store.hasConversation(old.id)).toBe(true)
+    expect(f.store.ensureDailyConversation()).toEqual(current)
+    expect(f.store.getConversation(old.id)?.piSessionId).toBe(old.piSessionId)
+    expect(f.store.getTopicInfo(old.id)).toBeNull()
+    expect(f.store.listTopicInfo()).toEqual([{ conversationId: current.id, kind: 'daily', shareProgress: false, shareRevision: 1 }])
+  })
+
   it('does not resume the paused queue or re-run anything by itself', async () => {
     const gate = gated(), s = await server(['hang', 'text'], { beforeReply: gate.beforeReply })
     const f = harness(), p = await profile(f, s.baseUrl)

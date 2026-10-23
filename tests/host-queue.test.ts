@@ -15,7 +15,7 @@ const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 async function profile(f: ReturnType<typeof harness>, baseUrl: string, extra: object = {}) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none', ...extra })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none', ...extra })
 }
 async function server(scenario: Scenario | Scenario[], options: Parameters<typeof startFixtureServer>[2] = {}) {
   const s = await startFixtureServer('openai', scenario, options); cleanup.push(s.close); return s

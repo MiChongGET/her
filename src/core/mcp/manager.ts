@@ -49,9 +49,9 @@ function diagnostic(error: unknown): string {
   // Never copy SDK errors: they can include response bodies, URLs, headers or env values.
   const message = error instanceof Error ? error.message : ''
   const staleObservation = '观察已失效或目标发生变化，请重新观察后再决定，不能重复未知动作。'
-  if ([staleObservation, 'Chrome 观察已失效，请重新读取页面或标签列表；不要重复未知动作。', 'MCP 工具清单已失效。'].includes(message)) return message
+  if ([staleObservation, 'MCP 工具清单已失效。'].includes(message)) return message
   if (/401|403|unauthorized|forbidden|authentication/i.test(message)) return 'MCP 认证或授权失败，请检查静态请求头；暂不支持 OAuth 交互登录。'
-  if (error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout) return 'MCP 工具调用超时，结果可能未知。使用 Chrome 预设时，请检查扩展连接批准页；先核对目标状态，不要重复操作。'
+  if (error instanceof SdkError && error.code === SdkErrorCode.RequestTimeout) return 'MCP 工具调用超时，结果可能未知。请先核对目标状态，不要重复操作。'
   if (/重复|冲突/.test(message)) return 'MCP 工具名称重复或冲突。'
   if (/10 MiB/.test(message)) return 'MCP 图片超过每张 10 MiB 的限制。'
   return 'MCP 连接、协议或工具内容不兼容，请检查服务、JSON Schema 和所需能力；暂不支持 OAuth、sampling 或交互请求。'
@@ -96,6 +96,19 @@ export class McpConnectionManager {
       this.invalidate(change.serviceId)
       this.statuses.set(change.serviceId, { serviceId: change.serviceId, revision: change.revision, state: 'disconnected', toolCount: 0 })
     })
+  }
+
+  onConfigChanged(listener: (serviceId: string) => void): () => void {
+    return this.configs.subscribe(change => listener(change.serviceId))
+  }
+
+  /** Service identities behind the tools in a task's frozen snapshot. */
+  servicesForTools(names: Iterable<string>): Set<string> {
+    const visible = new Set(names), services = new Set<string>()
+    for (const connection of this.connections.values()) {
+      if (connection.adapter.definitions().some(tool => visible.has(tool.name))) services.add(connection.serviceId)
+    }
+    return services
   }
 
   getStatus(serviceId: string): McpConnectionStatus {
@@ -350,7 +363,7 @@ export class McpConnectionManager {
           connection.adapter.clear()
           connection.adapter.register(connection.serviceId, connection.revision, result.tools, connection.policy,
             () => this.current(connection) && connection.discovered && catalog === connection.catalog,
-            toolName => (args, context) => this.dispatch(connection, catalog, toolName, args, context), connection.config?.allowAllOperations === true)
+            toolName => (args, context) => this.dispatch(connection, catalog, toolName, args, context))
           connection.catalog = catalog
         }
         connection.discovered = true

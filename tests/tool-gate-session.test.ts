@@ -40,7 +40,7 @@ async function run(protocol: Protocol, effect: ActionAssessment['effect'], decis
 describe('Pi session through the Her tool gate', () => {
   for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
     it(`${protocol}: exposes only gated tools and executes an allowed read call once`, async () => {
-      const r = await run(protocol, 'read')
+      const r = await run(protocol, 'read', 'approve')
       expect(r.active).toEqual([TOOL_NAME])
       expect(r.dispatched).toEqual([{ ok: true }])
       expect(r.results.map(result => result.isError)).toEqual([false])
@@ -70,7 +70,7 @@ describe('Pi session through the Her tool gate', () => {
   })
 
   it('openai: an MCP-style schema declaring JSON Schema 2020-12 still reaches the executor', async () => {
-    const r = await run('openai', 'read', undefined, { $schema: 'https://json-schema.org/draft/2020-12/schema' })
+    const r = await run('openai', 'read', 'approve', { $schema: 'https://json-schema.org/draft/2020-12/schema' })
     expect(r.dispatched).toEqual([{ ok: true }])
     expect(r.results.map(result => result.isError)).toEqual([false])
   })

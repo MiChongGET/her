@@ -62,9 +62,9 @@ Her-Pi-v1/
 ```
 
 - 对话消息的权威在 Pi 会话文件里；SQLite 里的 `projection_entries` 只是展示用投影，可以随时删除并重建。
-- SQLite 版本号固定为 1。遇到其他版本直接拒绝打开，不做迁移。
+- SQLite 版本号固定为 1。遇到其他版本直接拒绝打开，不做旧版资料迁移。用户于 2026-10-20 允许当前 Her-Pi-v1 增加 `purge_jobs` 清理任务表，以持久保存永久删除的墓碑与失败状态。
 - API Key 与自定义请求头用 `safeStorage` 加密后存入 SQLite，不进入渲染进程，也不写入日志。
-- 会话文件中间夹杂的坏行会被 Pi 静默跳过，整个文件无法识别时 Her 会拒绝读取并保持原文件不变。
+- Her 打开会话前用 Pi 导出的解析函数做只读完整性校验；发现坏行或无法识别的文件时拒绝读取并留下隔离标记，保持原文件不变。恢复有效文件并通过校验后解除隔离。
 
 ## 核心功能模块
 
@@ -88,7 +88,7 @@ Her-Pi-v1/
 
 ## IPC 通道
 
-渲染进程通过 `window.her` 调用，类型定义在 `src/shared/types.ts` 的 `HerApi`，实现在 `src/preload/index.ts` 与 `src/main/ipc.ts`。通道名为 `her:<主题>-<动作>`，按主题分组：`her:conversation-*`（会话与回收站）、`her:message*`（发送与取消）、`her:queue-*`（排队消息）、`her:task-*`（审批、继续、未知动作）、`her:compact*` 与 `her:model-switch`、`her:profile-*`、`her:files-*`、`her:mcp-*`、`her:artifact-*`、`her:system-*`。事件（聊天、请求）由主进程推送。
+渲染进程通过 `window.her` 调用，类型定义在 `src/shared/types.ts` 的 `HerApi`，实现在 `src/preload/index.ts` 与 `src/main/ipc.ts`。通道名为 `her:<主题>-<动作>`，按主题分组：`her:conversation-*`（会话与回收站）、`her:message*`（发送与取消）、`her:queue-*`（排队消息）、`her:task-*`（审批、继续、未知动作）、`her:compact*`、`her:context-usage`（上下文估算）与 `her:model-switch`、`her:profile-*`、`her:files-*`、`her:mcp-*`、`her:artifact-*`、`her:system-*`。事件（聊天、请求）由主进程推送。
 
 ## UI 设计风格
 

@@ -64,9 +64,9 @@
 
 ### D6. 资料布局与存储分工
 
-`main/index.ts` 改为 `join(app.getPath('appData'), 'Her-Pi-v1')`（`HER_DATA_DIR` 仍可覆盖，用于测试），布局见方案 §6。新建 `her.sqlite` schema（v1，不含旧迁移代码）：profiles、settings、conversations（含 trash/tombstone 状态）、input_queue、task_runs、tool_executions、tool_resolutions、target_quarantine、file_grants、file_references、artifacts/owners、documents/owners、mcp_services、projection（entry_id 主键、conversation_id、kind、payload、projection_version）、drafts（中断片段）、purge_jobs。
+`main/index.ts` 统一调用 `dataPaths(app.getPath('userData'))`，根目录为 `<userData>/Her-Pi-v1/`（`HER_DATA_DIR` 覆盖 userData，用于隔离测试），布局见方案 §6。新建 `her.sqlite` schema（v1，不含旧迁移代码）：profiles、settings、conversations（含 trash/tombstone 状态）、input_queue、task_runs、tool_executions、tool_resolutions、target_quarantine、file_grants、file_references、artifacts/owners、documents/owners、mcp_services、projection（entry_id 主键、conversation_id、kind、payload、projection_version）、drafts（中断片段）、purge_jobs。
 
-- 会话记录只经 `SessionManager` 读写；不手工解析或改写 JSONL。
+- 会话历史只经 `SessionManager` 解释和写入，不手工改写 JSONL。打开前允许 Her 只读检查原始行与 Pi 公开 `parseSessionEntries` 的结果数量，发现坏行即拒绝打开，并在 `pi/quarantine/<conversationId>` 留下隔离标记；用户恢复有效文件后重新校验并解除隔离（用户于 2026-10-20 确认）。
 - 关联：任务开始时用 `appendCustomEntry` 写入 `{type:'her.run', runId, requestId}`（不进入模型上下文），恢复时据此把 Pi 条目对齐到 `task_run`。
 - 投影：在 `turn_end`、`agent_settled` 和启动时从 `SessionManager.getEntries()` 按顺序拉取，以 entry ID 幂等 upsert，比较投影游标补齐缺失。1.3.0 实测普通消息在 `message_end` 监听器之后才 `appendMessage()` 且不派发 `entry_appended`（见 `experiments/pi-sdk-1.3.0/REPORT.md`），所以不依赖该事件。流式中的文本只进 drafts。排序使用条目在 SessionManager 中的顺序，不用随机 ID。
 - 恢复：`task_runs` 中非终态 → `interrupted`；`input_queue` 中 `dispatched` 但无对应 `her.run` 条目 → 回到 `pending` 并置队列 `paused`；`tool_executions` running/dispatched → `unknown` 并写隔离。
@@ -91,7 +91,7 @@
 - 关闭窗口：保持现有隐藏行为（已满足后台继续）。
 - 退出：`createShutdown` 的 `stop()` 改为 `AgentHost.stopAll()`（阻止新任务 → 并发 stop 每个句柄），`drain()` 等待全部句柄终态和账本落盘；超时只强杀 Her 启动的子进程。
 - 回收站：`conversations.state='trashed'` → 句柄 generation+1 → stop → 队列 paused → 释放句柄与专属 MCP 连接。
-- 永久删除：写 `purge_jobs` 墓碑 → 关闭句柄 → 删除 Pi 会话文件（经 SessionManager 已知路径）→ 删除投影/草稿/队列/缓存 → 附件引用计数归零才删 → 完成后删墓碑。失败保留墓碑与原因，回收站显示重试。会话扫描与投影重建跳过有墓碑的 ID。
+- 永久删除：写 `purge_jobs` 墓碑 → 关闭句柄 → 删除 Pi 会话文件（经 SessionManager 已知路径）→ 删除投影/草稿/队列/缓存 → 附件引用计数归零才删 → 完成后删墓碑。失败保留墓碑与原因，回收站显示重试。用户于 2026-10-20 确认允许给现有 Her-Pi-v1 增加 `purge_jobs` 表，不迁移旧版资料；启动时只恢复已获用户批准的清理任务。会话扫描与投影重建跳过有墓碑的 ID。
 
 ### D11. 删除旧协议层的时点
 

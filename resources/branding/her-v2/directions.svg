@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="860" viewBox="0 0 1440 860">
+<rect width="1440" height="860" fill="#f8f7f3"/>
+<g fill="#353a36" font-family="PingFang SC,Heiti SC,sans-serif">
+<text x="48" y="71" font-size="34" font-family="Songti SC,STSong,serif">Her</text>
+<text x="138" y="71" font-size="22">会记得你的私人伙伴</text>
+<text x="48" y="111" font-size="15" fill="#777c74">Logo 方向草案 · 陪伴与记忆为主，对话为辅</text>
+<g>
+ <rect x="48" y="150" width="432" height="640" rx="20" fill="#fcfdf9" stroke="#e5e6dd"/>
+
+ <svg x="168" y="220" width="192" height="192" viewBox="0 0 128 128"><defs><mask id="echo-separation-1"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation-1)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg>
+ <text x="80" y="466" font-size="25" font-weight="500">A · 相互回应</text>
+ <text x="80" y="501" font-size="17" fill="#66765d">两个彼此呼应的对话轮廓</text>
+ <text x="80" y="548" font-size="16" fill="#777c74">更容易感受到陪伴与交流。</text>
+ <text x="80" y="576" font-size="16" fill="#777c74">记忆的含义相对含蓄。</text>
+ <path d="M80 612H448" stroke="#e5e6dd"/>
+ <text x="80" y="648" font-size="12" fill="#777c74">实际小尺寸</text>
+ <svg x="88" y="704" width="18" height="18" viewBox="0 0 128 128"><defs><mask id="echo-separation-2"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation-2)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg><text x="97" y="752" text-anchor="middle" font-size="12" fill="#777c74">18px</text><svg x="178" y="698" width="24" height="24" viewBox="0 0 128 128"><defs><mask id="echo-separation-3"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation-3)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg><text x="190" y="752" text-anchor="middle" font-size="12" fill="#777c74">24px</text><svg x="268" y="690" width="32" height="32" viewBox="0 0 128 128"><defs><mask id="echo-separation-4"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation-4)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg><text x="284" y="752" text-anchor="middle" font-size="12" fill="#777c74">32px</text><svg x="358" y="674" width="48" height="48" viewBox="0 0 128 128"><defs><mask id="echo-separation-5"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation-5)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg><text x="382" y="752" text-anchor="middle" font-size="12" fill="#777c74">48px</text>
+ </g>
+<g>
+ <rect x="504" y="150" width="432" height="640" rx="20" fill="#fcfdf9" stroke="#e5e6dd"/>
+ <rect x="792" y="174" width="116" height="30" rx="15" fill="#e9eddf"/><text x="850" y="194" text-anchor="middle" font-size="13" fill="#66765d">功能表达优先</text>
+ <svg x="624" y="220" width="192" height="192" viewBox="0 0 128 128"><path fill="#66765d" fill-rule="evenodd" d="M35 20H93C106 20 114 30 114 43V78C114 91 105 100 92 100H59L34 116V99C22 98 14 89 14 77V43C14 29 22 20 35 20ZM53 40C53 38 55 36 58 36H80C83 36 85 38 85 40V76C85 78 83 79 81 77L69 67L57 77C55 79 53 78 53 76V40Z"/></svg>
+ <text x="536" y="466" font-size="25" font-weight="500">B · 把对话记下来</text>
+ <text x="536" y="501" font-size="17" fill="#66765d">对话轮廓里的书签负形</text>
+ <text x="536" y="548" font-size="16" fill="#777c74">聊天与记忆的功能更直接。</text>
+ <text x="536" y="576" font-size="16" fill="#777c74">更接近“会记得你的伙伴”。</text>
+ <path d="M536 612H904" stroke="#e5e6dd"/>
+ <text x="536" y="648" font-size="12" fill="#777c74">实际小尺寸</text>
+ <svg x="544" y="704" width="18" height="18" viewBox="0 0 128 128"><path fill="#66765d" fill-rule="evenodd" d="M35 20H93C106 20 114 30 114 43V78C114 91 105 100 92 100H59L34 116V99C22 98 14 89 14 77V43C14 29 22 20 35 20ZM53 40C53 38 55 36 58 36H80C83 36 85 38 85 40V76C85 78 83 79 81 77L69 67L57 77C55 79 53 78 53 76V40Z"/></svg><text x="553" y="752" text-anchor="middle" font-size="12" fill="#777c74">18px</text><svg x="634" y="698" width="24" height="24" viewBox="0 0 128 128"><path fill="#66765d" fill-rule="evenodd" d="M35 20H93C106 20 114 30 114 43V78C114 91 105 100 92 100H59L34 116V99C22 98 14 89 14 77V43C14 29 22 20 35 20ZM53 40C53 38 55 36 58 36H80C83 36 85 38 85 40V76C85 78 83 79 81 77L69 67L57 77C55 79 53 78 53 76V40Z"/></svg><text x="646" y="752" text-anchor="middle" font-size="12" fill="#777c74">24px</text><svg x="724" y="690" width="32" height="32" viewBox="0 0 128 128"><path fill="#66765d" fill-rule="evenodd" d="M35 20H93C106 20 114 30 114 43V78C114 91 105 100 92 100H59L34 116V99C22 98 14 89 14 77V43C14 29 22 20 35 20ZM53 40C53 38 55 36 58 36H80C83 36 85 38 85 40V76C85 78 83 79 81 77L69 67L57 77C55 79 53 78 53 76V40Z"/></svg><text x="740" y="752" text-anchor="middle" font-size="12" fill="#777c74">32px</text><svg x="814" y="674" width="48" height="48" viewBox="0 0 128 128"><path fill="#66765d" fill-rule="evenodd" d="M35 20H93C106 20 114 30 114 43V78C114 91 105 100 92 100H59L34 116V99C22 98 14 89 14 77V43C14 29 22 20 35 20ZM53 40C53 38 55 36 58 36H80C83 36 85 38 85 40V76C85 78 83 79 81 77L69 67L57 77C55 79 53 78 53 76V40Z"/></svg><text x="838" y="752" text-anchor="middle" font-size="12" fill="#777c74">48px</text>
+ </g>
+<g>
+ <rect x="960" y="150" width="432" height="640" rx="20" fill="#fcfdf9" stroke="#e5e6dd"/>
+
+ <svg x="1080" y="220" width="192" height="192" viewBox="0 0 128 128"><path d="M14 28C30 23 46 25 59 36V96C49 88 36 84 25 85L14 97V28Z" fill="#66765d"/>
+<path d="M69 36C82 25 98 23 114 28V89C98 85 82 89 69 100V36Z" fill="#66765d"/></svg>
+ <text x="992" y="466" font-size="25" font-weight="500">C · 共同记忆</text>
+ <text x="992" y="501" font-size="17" fill="#66765d">展开的两页，也像一段交流</text>
+ <text x="992" y="548" font-size="16" fill="#777c74">偏安静、私密的日常记忆。</text>
+ <text x="992" y="576" font-size="16" fill="#777c74">也容易让人联想到日记或阅读。</text>
+ <path d="M992 612H1360" stroke="#e5e6dd"/>
+ <text x="992" y="648" font-size="12" fill="#777c74">实际小尺寸</text>
+ <svg x="1000" y="704" width="18" height="18" viewBox="0 0 128 128"><path d="M14 28C30 23 46 25 59 36V96C49 88 36 84 25 85L14 97V28Z" fill="#66765d"/>
+<path d="M69 36C82 25 98 23 114 28V89C98 85 82 89 69 100V36Z" fill="#66765d"/></svg><text x="1009" y="752" text-anchor="middle" font-size="12" fill="#777c74">18px</text><svg x="1090" y="698" width="24" height="24" viewBox="0 0 128 128"><path d="M14 28C30 23 46 25 59 36V96C49 88 36 84 25 85L14 97V28Z" fill="#66765d"/>
+<path d="M69 36C82 25 98 23 114 28V89C98 85 82 89 69 100V36Z" fill="#66765d"/></svg><text x="1102" y="752" text-anchor="middle" font-size="12" fill="#777c74">24px</text><svg x="1180" y="690" width="32" height="32" viewBox="0 0 128 128"><path d="M14 28C30 23 46 25 59 36V96C49 88 36 84 25 85L14 97V28Z" fill="#66765d"/>
+<path d="M69 36C82 25 98 23 114 28V89C98 85 82 89 69 100V36Z" fill="#66765d"/></svg><text x="1196" y="752" text-anchor="middle" font-size="12" fill="#777c74">32px</text><svg x="1270" y="674" width="48" height="48" viewBox="0 0 128 128"><path d="M14 28C30 23 46 25 59 36V96C49 88 36 84 25 85L14 97V28Z" fill="#66765d"/>
+<path d="M69 36C82 25 98 23 114 28V89C98 85 82 89 69 100V36Z" fill="#66765d"/></svg><text x="1294" y="752" text-anchor="middle" font-size="12" fill="#777c74">48px</text>
+ </g>
+<text x="48" y="827" font-size="13" fill="#777c74">配色保持暖白与灰绿；Samantha 头像沿用已确认的人物方向。</text>
+</g></svg>

@@ -1,0 +1,3 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128"><title>Her · 相互回应 · 方向草案 A</title><defs><mask id="echo-separation"><rect width="128" height="128" fill="white"/><path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="black" stroke="black" stroke-width="14" stroke-linejoin="round"/></mask></defs>
+<path d="M30 26H66C76 26 84 34 84 44V62C84 72 76 80 66 80H47L28 95V79C18 77 12 71 12 61V44C12 34 20 26 30 26Z" fill="none" stroke="#66765d" stroke-width="8" stroke-linejoin="round" mask="url(#echo-separation)"/>
+<path d="M62 44H96C106 44 114 52 114 62V80C114 90 106 98 96 98H91V112L72 98H62C52 98 44 90 44 80V62C44 52 52 44 62 44Z" fill="#66765d"/></svg>

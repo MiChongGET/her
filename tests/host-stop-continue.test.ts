@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { afterEach, describe, expect, it } from 'vitest'
 import { SimpleToolRegistry } from '../src/core/tools/registry'
 import { startFixtureServer, TOOL_NAME, type Scenario } from './pi-sdk/wire'
-import { harness, harnessCleanup } from './helpers/host-harness'
+import { approveNextTool, harness, harnessCleanup } from './helpers/host-harness'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
@@ -13,7 +13,7 @@ async function server(scenario: Scenario | Scenario[]) {
   const s = await startFixtureServer('openai', scenario); cleanup.push(s.close); return s
 }
 async function profile(f: ReturnType<typeof harness>, baseUrl: string) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
 }
 /** A mutating tool that stays in flight until `finish` is called. */
 function slowTool(options: { effect?: 'send' | 'read' } = {}) {
@@ -22,7 +22,7 @@ function slowTool(options: { effect?: 'send' | 'read' } = {}) {
   const registry = new SimpleToolRegistry()
   registry.register({ name: TOOL_NAME, description: 'act', parameters: schema },
     () => { calls.push('started'); return new Promise(resolve => { finish = () => resolve({ content: [{ type: 'text', text: 'too late' }] }) }) },
-    { assess: async () => ({ effect: options.effect ?? 'send', target: 'thing', summary: 'act' }), allowAllOperations: true })
+    { assess: async () => ({ effect: options.effect ?? 'send', target: 'thing', summary: 'act' }) })
   return { registry, calls, finish: () => finish() }
 }
 
@@ -48,6 +48,7 @@ describe('stopping a run', () => {
     const tool = slowTool()
     const f = harness(undefined, async () => tool.registry.snapshot()), p = await profile(f, s.baseUrl)
     const first = await f.send(f.id, p.id, 'act')
+    await approveNextTool(f.chat, f.id)
     await expect.poll(() => tool.calls.length, { timeout: 10_000 }).toBe(1)
     f.chat.cancel(first.requestId)
     await expect.poll(() => f.finished(first.requestId)?.state, { timeout: 10_000 }).toBe('cancelled')
@@ -90,10 +91,11 @@ describe('an unknown action pauses the queue', () => {
     const failing = new SimpleToolRegistry()
     failing.register({ name: TOOL_NAME, description: 'act', parameters: schema },
       async () => ({ isError: true, content: [{ type: 'text', text: 'boom' }] }),
-      { assess: async () => ({ effect: 'send', target: 'thing', summary: 'act' }), allowAllOperations: true })
+      { assess: async () => ({ effect: 'send', target: 'thing', summary: 'act' }) })
     const g = harness(undefined, async () => failing.snapshot()), q = await profile(g, s.baseUrl)
     const first = await g.send(g.id, q.id, 'act')
     const second = await g.send(g.id, q.id, 'next')
+    await approveNextTool(g.chat, g.id)
     await expect.poll(() => g.finished(first.requestId)?.state, { timeout: 15_000 }).toBe('completed')
     await wait(300)
     expect(g.chat.getQueue(g.id).paused).toBe('unknown-action')
@@ -110,6 +112,7 @@ describe('continuing a task', () => {
     const tool = slowTool()
     const f = harness(undefined, async () => tool.registry.snapshot()), p = await profile(f, s.baseUrl)
     const first = await f.send(f.id, p.id, 'act')
+    await approveNextTool(f.chat, f.id)
     await expect.poll(() => tool.calls.length, { timeout: 10_000 }).toBe(1)
     f.chat.cancel(first.requestId)
     await expect.poll(() => f.finished(first.requestId)?.state, { timeout: 10_000 }).toBe('cancelled')

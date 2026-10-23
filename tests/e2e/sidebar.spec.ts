@@ -12,36 +12,27 @@ async function launch(dataDirectory: string): Promise<{ app: ElectronApplication
   const executablePath = process.env.HER_TEST_APP_EXECUTABLE
   const app = await _electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [resolve('.')] }), env })
   const page = await app.firstWindow()
-  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
   return { app, page }
 }
 
-test('desktop: conversation groups collapse with a click and reopen with Enter without losing focus', async () => {
+test('desktop: topic list actions open from the keyboard without losing the topic', async () => {
   const dataDirectory = mkdtempSync(join(tmpdir(), 'her-sidebar-groups-'))
   let app: ElectronApplication | undefined
   try {
     const running = await launch(dataDirectory)
     app = running.app
     const page = running.page
-    await page.getByRole('button', { name: '新对话', exact: true }).click()
-    const today = page.getByRole('region', { name: '今天的对话', exact: true })
-    const toggle = today.getByRole('button', { name: '今天', exact: true })
-    const conversation = today.locator('[aria-current="page"]')
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(conversation).toBeVisible()
-
-    await toggle.click()
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    await expect(conversation).toBeHidden()
-    await expect(toggle).toBeFocused()
-
-    await toggle.press('Enter')
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-    await expect(conversation).toBeVisible()
-    await expect(toggle).toBeFocused()
-    await toggle.press('Enter')
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
-    await expect(conversation).toBeHidden()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.getByRole('button', { name: '另开一个话题' }).first().click()
+    await page.getByRole('button', { name: '返回话题' }).click()
+    const topic = page.getByRole('button', { name: '新对话', exact: true })
+    const menu = page.getByLabel('新对话的更多操作')
+    await expect(topic).toBeVisible()
+    await menu.focus()
+    await menu.press('Enter')
+    await expect(page.getByRole('button', { name: '重命名' })).toBeVisible()
+    await expect(topic).toBeVisible()
   } finally {
     await app?.close()
     rmSync(dataDirectory, { recursive: true, force: true })
@@ -55,15 +46,19 @@ test('desktop: sidebar resizing and visibility preserve room for chat in wide an
     const running = await launch(dataDirectory)
     app = running.app
     const page = running.page
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('button', { name: '添加服务', exact: true }).click()
     await page.getByLabel('服务名称', { exact: true }).fill('侧栏布局验收')
     await page.getByLabel('Base URL', { exact: true }).fill('http://127.0.0.1:11434/v1')
     await page.getByLabel('Model ID', { exact: true }).fill('layout-model')
+    await page.getByLabel('认证方式', { exact: true }).selectOption('none')
+    await page.getByText('高级选项', { exact: true }).click()
+    await page.getByLabel('上下文容量', { exact: true }).fill('128000')
     await page.getByRole('button', { name: '保存服务', exact: true }).click()
     await expect(page.getByText('服务已保存', { exact: true })).toBeVisible()
     await page.getByRole('button', { name: '关闭设置', exact: true }).click()
-    await page.getByRole('button', { name: '新对话', exact: true }).click()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.getByRole('button', { name: '另开一个话题' }).first().click()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1100, 760))
     const sidebar = page.getByRole('complementary', { name: '会话侧栏', exact: true })
     const separator = page.getByRole('separator', { name: '调整侧栏宽度', exact: true })
@@ -114,7 +109,9 @@ test('desktop: sidebar resizing and visibility preserve room for chat in wide an
     expect(composer).not.toBeNull()
     expect(composer!.width).toBeGreaterThan(200)
     expect(composer!.x + composer!.width).toBeLessThanOrEqual(viewportWidth + 1)
-    await expect(page.getByRole('combobox', { name: '当前模型', exact: true })).toBeInViewport()
+    await expect(page.locator('.model-details summary').first()).toBeInViewport()
+    await page.locator('.model-details summary').first().click()
+    await expect(page.getByRole('combobox', { name: '当前模型', exact: true })).toBeVisible()
     await expect(page.getByRole('button', { name: '隐藏侧栏', exact: true })).toBeInViewport()
     await page.screenshot({ path: testInfo.outputPath('sidebar-narrow.png') })
   } finally {

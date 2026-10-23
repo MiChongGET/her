@@ -1,6 +1,7 @@
 import { Type } from 'typebox'
 import type { ToolDefinition as PiToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { FileSources, ToolResult } from '../../shared/types'
+import { modelToolResultText } from './result-format'
 import type { ToolExecutionContext, ToolRegistry } from './types'
 
 export type GateContext = Omit<ToolExecutionContext, 'callId' | 'signal'> & {
@@ -14,11 +15,11 @@ export type GateContext = Omit<ToolExecutionContext, 'callId' | 'signal'> & {
 type PiContent = { type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string }
 
 async function toPiContent(result: ToolResult, context: GateContext, executionContext: ToolExecutionContext): Promise<PiContent[]> {
-  const content: PiContent[] = []
+  const text = modelToolResultText(result)
+  const content: PiContent[] = text ? [{ type: 'text', text }] : []
   for (const part of result.content) {
-    if (part.type === 'text') content.push({ type: 'text', text: part.text })
-    else if (part.type === 'resource_link') content.push({ type: 'text', text: `[资源 ${part.name}: ${part.uri}]` })
-    else if (context.modelSupportsVision && context.readImage) {
+    if (part.type !== 'image') continue
+    if (context.modelSupportsVision && context.readImage) {
       try { content.push({ type: 'image', data: Buffer.from(await context.readImage(part.artifactId, executionContext)).toString('base64'), mimeType: part.mimeType }) }
       catch { content.push({ type: 'text', text: `[图片 ${part.artifactId} 无法读取]` }) }
     } else content.push({ type: 'text', text: `[图片 ${part.artifactId}]` })
@@ -45,7 +46,7 @@ export function createGatedTools(registry: ToolRegistry, context: GateContext): 
       const content = await toPiContent(result, context, executionContext)
       // Pi marks a tool call as failed only when execute throws.
       if (result.isError) throw new Error(textOf(content) || '工具执行失败。')
-      return { content, details: result.structuredContent ?? {} }
+      return { content, details: { herResult: result } }
     }
   }))
 }

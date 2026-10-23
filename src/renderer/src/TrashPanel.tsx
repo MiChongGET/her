@@ -81,7 +81,12 @@ export default function TrashPanel({ onClose, onRestored }: Props) {
         setSelectedIds((ids) => { const next = new Set(ids); next.delete(id); return next })
         setConfirmId(null)
       }
-    } catch (cause) { if (mounted.current) setError(`无法永久删除：${messageOf(cause)}`) }
+    } catch (cause) {
+      if (mounted.current) {
+        setError(`无法永久删除：${messageOf(cause)}`)
+        try { const list = await window.her.listTrashedConversations(); if (mounted.current) { setItems(list); setConfirmId(null) } } catch { /* keep the prior list */ }
+      }
+    }
     finally { if (mounted.current) setBusy(false) }
   }
 
@@ -135,50 +140,17 @@ export default function TrashPanel({ onClose, onRestored }: Props) {
   }
 
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose() }}>
-    <div className="settings-dialog trash-dialog" role="dialog" aria-modal="true" aria-labelledby="trash-title" tabIndex={-1} ref={dialogRef}>
+    <div className={`settings-dialog trash-dialog${items?.length ? '' : ' trash-dialog-empty'}`} role="dialog" aria-modal="true" aria-labelledby="trash-title" tabIndex={-1} ref={dialogRef}>
       <header className="settings-header">
         <div>
-          <p className="eyebrow">删除的对话会留在这里</p>
           <h2 id="trash-title">回收站</h2>
+          <p className="trash-subtitle">放在这里的话题，可以再找回来。</p>
         </div>
-        {items && items.length > 0 && (
-          <div className="trash-header-actions">
-            {selectedIds.size > 0 ? (
-              <>
-                <span className="selected-count">{selectedIds.size} 项已选</span>
-                <button
-                  className="secondary-button"
-                  disabled={busy}
-                  onClick={clearSelection}
-                >
-                  取消选择
-                </button>
-                <button
-                  className="danger-button"
-                  disabled={busy}
-                  onClick={() => setConfirmBatchDelete(true)}
-                >
-                  <Icon name="trash" />
-                  删除选中项
-                </button>
-              </>
-            ) : (
-              <button
-                className="danger-button-outline"
-                disabled={busy}
-                onClick={() => setConfirmClearAll(true)}
-              >
-                <Icon name="trash" />
-                清空回收站
-              </button>
-            )}
-          </div>
-        )}
         <button className="icon-button" aria-label="关闭回收站" onClick={onClose}><Icon name="close" /></button>
       </header>
       <div className="settings-content">
         {error && <div className="error-banner" role="alert">{error}</div>}
-        {items === null ? <p className="trash-empty" role="status">正在读取…</p> : items.length === 0 ? <p className="trash-empty">回收站是空的。</p> : <ul className="trash-list" aria-label="已删除的对话">{items.map((item) => <li key={item.id} className={`trash-row${selectedIds.has(item.id) ? ' selected' : ''}`}>
+        {items === null ? <p className="trash-loading" role="status">正在读取…</p> : items.length === 0 ? <div className="trash-empty"><Icon name="leaf" /><h3>回收站是空的</h3><p>移入回收站的话题，会放在这里。</p></div> : <><ul className="trash-list" aria-label="已删除的对话">{items.map((item) => <li key={item.id} className={`trash-row${selectedIds.has(item.id) ? ' selected' : ''}`}>
           <div className="trash-checkbox">
             <input
               type="checkbox"
@@ -188,11 +160,14 @@ export default function TrashPanel({ onClose, onRestored }: Props) {
               aria-label={`选择 ${item.title}`}
             />
           </div>
-          <div className="trash-info"><strong>{item.title}</strong><small>删除于 {new Date(item.deletedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></div>
-          {confirmId === item.id ? <div className="delete-confirm"><span>永久删除后无法恢复。</span><button className="danger-button" disabled={busy} onClick={() => void purge(item.id)}>确认永久删除</button><button className="text-button" disabled={busy} onClick={() => setConfirmId(null)}>取消</button></div>
-            : <div className="trash-actions"><button className="text-button" aria-label={`恢复 ${item.title}`} disabled={busy || selectedIds.size > 0} onClick={() => void restore(item.id)}><Icon name="retry" />恢复</button><button className="text-button danger" aria-label={`永久删除 ${item.title}`} disabled={busy || selectedIds.size > 0} onClick={() => setConfirmId(item.id)}><Icon name="trash" />永久删除</button></div>}
-        </li>)}</ul>}
+          <div className="trash-info"><strong>{item.title}</strong>{item.cleanupPending && <p>{item.cleanupError || '清理未完成'}</p>}<small>删除于 {new Date(item.deletedAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</small></div>
+          {item.cleanupPending ? <button className="text-button" disabled={busy} aria-label={`重试清理 ${item.title}`} onClick={() => void purge(item.id)}>重试清理</button> : confirmId === item.id ? <div className="delete-confirm"><span>永久删除后无法恢复。</span><button className="danger-button" disabled={busy} onClick={() => void purge(item.id)}>确认永久删除</button><button className="text-button" disabled={busy} onClick={() => setConfirmId(null)}>取消</button></div>
+            : <div className="trash-actions"><button className="text-button" aria-label={`恢复 ${item.title}`} disabled={busy || selectedIds.size > 0} onClick={() => void restore(item.id)}>恢复</button><button className="text-button danger" aria-label={`永久删除 ${item.title}`} disabled={busy || selectedIds.size > 0} onClick={() => setConfirmId(item.id)}>永久删除</button></div>}
+        </li>)}</ul><p className="trash-note">恢复只恢复查看，不自动继续办理或重放旧确认。</p></>}
       </div>
+      {items && items.length > 0 && <footer className="trash-footer">
+        {selectedIds.size > 0 ? <><span className="selected-count">{selectedIds.size} 项已选</span><button className="secondary-button" disabled={busy} onClick={clearSelection}>取消选择</button><button className="danger-button" disabled={busy} onClick={() => setConfirmBatchDelete(true)}>删除选中项</button></> : <button className="danger-button-outline" disabled={busy} onClick={() => setConfirmClearAll(true)}>清空回收站</button>}
+      </footer>}
       {confirmBatchDelete && (
         <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) setConfirmBatchDelete(false) }}>
           <div className="settings-dialog" role="alertdialog" aria-modal="true" aria-labelledby="batch-delete-title" aria-describedby="batch-delete-desc">

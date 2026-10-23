@@ -1,0 +1,64 @@
+{
+  "revision": "her-request-confinement-v1",
+  "upstreamVersion": "2.2.0",
+  "upstreamTreeSha256": "e4f65c6b7244abe3257142a7b473ba0d6e50d65f56520397826cc6d56d049b03",
+  "patchedTreeSha256": "b8d9e106bc30e4877acbdea464cc333f3fac49e6794e4c0b2cff190493796598",
+  "files": [
+    {
+      "path": "build/tools/setupTools.js",
+      "beforeSha256": "227548a2116b7f082f3b355ea8fe4d4d6b3e19ba6e13ff76f456071c502cfdd6",
+      "afterSha256": "e8644404105cd206ed0110519d339775195601db0948cac084ebd51acd52c0cd",
+      "replacements": [
+        {
+          "before": "renderMode: z.enum(['request', 'auto', 'browser']).optional()",
+          "after": "renderMode: z.enum(['request', 'auto', 'browser']).optional(),\n            redirectPolicy: z.enum(['error']).optional()"
+        },
+        {
+          "before": "async ({ url, maxChars = 30000, readability, includeLinks, renderMode })",
+          "after": "async ({ url, maxChars = 30000, readability, includeLinks, renderMode, redirectPolicy })"
+        },
+        {
+          "before": "execute({ url, maxChars, readability, includeLinks, renderMode })",
+          "after": "execute({ url, maxChars, readability, includeLinks, renderMode, redirectPolicy })"
+        }
+      ]
+    },
+    {
+      "path": "build/core/fetch/fetchServices.js",
+      "beforeSha256": "93649f136145bbd7ebdeadc1ec8c69b0f6da4edab8e8ef0fd0f6220203c30f9a",
+      "afterSha256": "7d219649d3e58e1185428163bd45a2c4f10dd1fe56b6f18ffbf60d53731432c9",
+      "replacements": [
+        {
+          "before": "async execute({ url, maxChars, readability, includeLinks, renderMode })",
+          "after": "async execute({ url, maxChars, readability, includeLinks, renderMode, redirectPolicy })"
+        },
+        {
+          "before": "{ readability, includeLinks, renderMode }",
+          "after": "{ readability, includeLinks, renderMode, redirectPolicy }"
+        }
+      ]
+    },
+    {
+      "path": "build/engines/web/fetchWebContent.js",
+      "beforeSha256": "da27a44a1214518b99d6d21992f920685f0ae4a844a1c7829575beeeafeb6fbd",
+      "afterSha256": "734540728476890337e37aa5d91eae07882c9188613c0d35fca65e4aadcddc98",
+      "replacements": [
+        {
+          "before": "        const requestOptions = buildRequestOptions();",
+          "after": "        const requestOptions = buildRequestOptions();\n        // Her request confinement v1: reject redirects before dispatching any next hop.\n        if (renderMode === 'request' && options.redirectPolicy === 'error') requestOptions.maxRedirects = 0;"
+        }
+      ]
+    },
+    {
+      "path": "build/engines/bing/bing.js",
+      "beforeSha256": "bc7aeeb6ef0d9bce33b5e83b66640e27794b68b162cf92d7dfaa651197517005",
+      "afterSha256": "1ba28b30cc2b43d9b0e7a8a3911f2f31939fc0da319ff46638f4ce01a38eadb1",
+      "replacements": [
+        {
+          "before": "const BING_MAX_REGIONAL_REDIRECTS = 1;",
+          "after": "const BING_MAX_REGIONAL_REDIRECTS = 0; // Her request confinement v1"
+        }
+      ]
+    }
+  ]
+}

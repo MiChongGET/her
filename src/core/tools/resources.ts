@@ -13,13 +13,16 @@ export class ResourceQueue {
   private readonly held = new Set<string>()
   private waiters: Waiter[] = []
 
-  acquire(keys: readonly string[], signal: AbortSignal): Promise<() => void> {
+  acquire(keys: readonly string[], signal: AbortSignal, onWaiting?: (waiting: boolean) => void): Promise<() => void> {
     if (signal.aborted) return Promise.reject(signal.reason)
     const sorted = [...new Set(keys)].sort()
+    const waiting = sorted.some(key => this.held.has(key) || this.waiters.some(waiter => waiter.keys.includes(key)))
+    if (waiting) onWaiting?.(true)
     return new Promise((resolve, reject) => {
-      const waiter: Waiter = { keys: sorted, grant: release => { signal.removeEventListener('abort', cancel); resolve(release) } }
+      const waiter: Waiter = { keys: sorted, grant: release => { signal.removeEventListener('abort', cancel); if (waiting) onWaiting?.(false); resolve(release) } }
       const cancel = () => {
         this.waiters = this.waiters.filter(item => item !== waiter)
+        if (waiting) onWaiting?.(false)
         reject(signal.reason)
         this.schedule()
       }

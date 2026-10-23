@@ -13,6 +13,7 @@ export interface McpServicePolicy {
   parameters?: (toolName: string, schema: Record<string, unknown>) => Record<string, unknown>
   execute?: (toolName: string, args: Record<string, unknown>, context: ToolExecutionContext,
     dispatch: (name: string, args: Record<string, unknown>, phase?: 'preflight' | 'action') => Promise<ToolResult>) => Promise<ToolResult>
+  describeAction?: (toolName: string, args: Record<string, unknown>, context: ToolExecutionContext) => ReturnType<NonNullable<ToolRegistrationOptions['describeAction']>>
   assess?: (toolName: string, args: Record<string, unknown>, context: ToolExecutionContext) => Promise<ActionAssessment>
   validateObservation?: ToolRegistrationOptions['validateObservation']
   resources?: (toolName: string, args: Record<string, unknown>, assessment: ActionAssessment) => string[]
@@ -28,7 +29,7 @@ export class McpRegistryAdapter {
   constructor(private readonly registry: SimpleToolRegistry, private readonly serviceName: string) {}
 
   register(serviceId: string, revision: number, tools: Tool[], policy: McpServicePolicy,
-    available: () => boolean, executor: (toolName: string) => ToolExecutor, allowAllOperations = false): void {
+    available: () => boolean, executor: (toolName: string) => ToolExecutor, _legacyAllowAllOperations = false): void {
     const seen = new Set<string>()
     const existing = new Set<string>()
     const entries: { name: string; remote: string; definition: ToolDefinition }[] = []
@@ -45,7 +46,7 @@ export class McpRegistryAdapter {
       for (const entry of entries) {
         this.registry.register(entry.definition, executor(entry.remote), {
           conversationApprovalScope: policy.conversationApprovalScope,
-          allowAllOperations,
+          describeAction: policy.describeAction ? (args, context) => policy.describeAction!(entry.remote, args, context) : undefined,
           deferDispatch: policy.deferDispatch, revision: String(revision), isAvailable: available, timeoutMs: policy.timeoutMs,
           assess: policy.assess ? (args, context) => policy.assess!(entry.remote, args, context)
             : async args => ({ effect: 'unknown', target: entry.name, displayTarget: `${this.serviceName} / ${entry.remote}`, summary: `调用 ${this.serviceName} 的 ${entry.remote}，参数：${JSON.stringify(args)}` }),

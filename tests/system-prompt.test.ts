@@ -33,6 +33,16 @@ describe('buildSystemPrompt', () => {
   it('tells the model never to replay an action whose outcome is unknown', () => {
     expect(buildSystemPrompt('p', ['x'], { contextWindow: 200_000 })).toContain('结果未知的动作不得重放')
   })
+  it('only adds the browser completion agreement when browser execution is available', () => {
+    for (const tools of [[], ['read_text'], ['ego_browser_guide']]) {
+      expect(buildSystemPrompt('p', tools, { contextWindow: 200_000 })).not.toContain('Her 浏览器收尾约定')
+    }
+    const text = buildSystemPrompt('p', ['ego_browser_run'], { contextWindow: 200_000 })
+    expect(text).toContain('task.finish({ keep: [] })')
+    expect(text).toMatch(/仅在用户明确要求保留时/)
+    expect(text).toMatch(/失败、停止、结果未知或用户接管时不得自动 finish/)
+    expect(text).toMatch(/检查.*返回结果后才报告关闭/)
+  })
 })
 
 describe('skills and the window', () => {
@@ -47,16 +57,23 @@ describe('skills and the window', () => {
     expect(text).not.toContain('builtin_skill')
     expect(text).toContain('read_text')
   })
+  it('keeps the browser completion agreement when the official skill is omitted for a small window', () => {
+    const text = buildSystemPrompt('p', ['ego_browser_run'], { contextWindow: 2048 })
+    expect(text).not.toContain('builtin_skill')
+    expect(text).toContain('task.finish({ keep: [] })')
+    expect(text).toContain('不得为了方便查看或可能继续而保留')
+    expect(text).toContain('不为关闭而 claim')
+  })
 })
 
 describe('what the model receives', () => {
-  async function send(tools: boolean) {
+  async function send(tools: boolean | string[], contextWindow = 128000) {
     const s = await startFixtureServer('openai', 'text'); cleanup.push(s.close)
     const registry = new SimpleToolRegistry()
-    if (tools) registry.register({ name: TOOL_NAME, description: 'x', parameters: { type: 'object', properties: {}, additionalProperties: false } },
+    for (const name of Array.isArray(tools) ? tools : tools ? [TOOL_NAME] : []) registry.register({ name, description: 'x', parameters: { type: 'object', properties: {}, additionalProperties: false } },
       async () => ({ content: [] }), { assess: async () => ({ effect: 'read', target: 'x', summary: 'x' }) })
     const f = harness(undefined, async () => registry.snapshot())
-    const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow, authMethod: 'none' })
     f.store.saveSettings({ ...f.store.getSettings(), systemPrompt: 'MY CUSTOM PROMPT' })
     const sent = await f.send(f.id, p.id, 'hi')
     await expect.poll(() => f.finished(sent.requestId)?.state, { timeout: 10_000 }).toBe('completed')
@@ -68,11 +85,20 @@ describe('what the model receives', () => {
     expect(body).toContain('builtin_skill')
     expect(body).toContain(TOOL_NAME)
     expect(body).toContain('Host 实际操作系统')
+    expect(body).not.toContain('Her 浏览器收尾约定')
   })
   it('with no tools the request still carries the skills but no environment block', async () => {
     const body = await send(false)
     expect(body).toContain('MY CUSTOM PROMPT')
     expect(body).toContain('builtin_skill')
     expect(body).not.toContain('Host 实际操作系统')
+  })
+  it.each([2048, 128000])('sends the completion agreement through the real SDK request with a %i-token window', async contextWindow => {
+    const body = await send(['ego_browser_run'], contextWindow)
+    expect(body).toContain('task.finish({ keep: [] })')
+    expect(body).toContain('console.log(JSON.stringify(await task.finish')
+    expect(body).toContain('仅在用户明确要求保留时')
+    expect(body).toContain('失败、停止、结果未知或用户接管时不得自动 finish')
+    if (contextWindow === 2048) expect(body).not.toContain('builtin_skill')
   })
 })

@@ -89,7 +89,7 @@ describe('permanently deleting a conversation', () => {
     store.quarantineTarget('other-key', other, 'task-b', 'call-b')
     store.trashConversation(purged)
     store.purgeConversation(purged)
-    expect(store.listQuarantinedTargets()).toEqual(['other-key'])
+    expect(store.listQuarantinedTargets()).toEqual(['other-key', 'shared-looking-key'])
     expect(store.isTargetQuarantined('other-key')).toBe(true)
   })
 
@@ -104,4 +104,50 @@ describe('permanently deleting a conversation', () => {
     expect(store.hasConversation(a)).toBe(false) // still trashed, not gone
     expect(store.listTrashedConversations().map(c => c.id).sort()).toEqual([a, b].sort())
   })
+})
+
+import { harness, harnessCleanup } from './helpers/host-harness'
+import { startFixtureServer } from './pi-sdk/wire'
+import { AgentHost } from '../src/core/agent/host'
+import { DatabaseSync } from 'node:sqlite'
+
+async function withPiHistory() {
+  const server = await startFixtureServer('openai', 'text'); harnessCleanup.push(server.close)
+  const f = harness()
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
+  const sent = await f.send(f.id, p.id, 'history')
+  await expect.poll(() => f.finished(sent.requestId)?.state).toBe('completed')
+  await f.chat.trashConversation(f.id)
+  return f
+}
+afterEach(async () => { for (const close of harnessCleanup.splice(0).reverse()) await close() })
+
+it('permanent deletion removes Pi history and workspace while retaining unknown target isolation', async () => {
+  const f = await withPiHistory()
+  const sessionDir = join(f.directory, 'pi', 'sessions', f.id)
+  expect(existsSync(sessionDir)).toBe(true)
+  f.store.quarantineTarget('external-unknown', f.id, 'old-task', 'old-call')
+  await f.chat.purgeConversations([f.id])
+  expect(existsSync(sessionDir)).toBe(false)
+  expect(existsSync(join(f.directory, 'pi', 'workspaces', f.id))).toBe(false)
+  expect(f.store.hasConversation(f.id)).toBe(false)
+  expect(f.store.isTargetQuarantined('external-unknown')).toBe(true)
+})
+
+it('retains a durable tombstone and visible error after failed deletion, blocks restore, and retries after restart', async () => {
+  const f = await withPiHistory()
+  const raw = new DatabaseSync(join(f.directory, 'her.sqlite'))
+  raw.exec("CREATE TRIGGER fail_pi_purge BEFORE DELETE ON conversations BEGIN SELECT RAISE(ABORT, 'injected purge error'); END;")
+  await expect(f.chat.purgeConversations([f.id])).rejects.toThrow('清理')
+  expect(f.store.listTrashedConversations()[0]).toMatchObject({ cleanupPending: true, cleanupError: expect.stringContaining('清理') })
+  expect(() => f.chat.restoreConversation(f.id)).toThrow('清理')
+  await f.chat.shutdown()
+  const restarted = new AgentHost(f.store, f.profiles, f.directory)
+  harnessCleanup.push(() => restarted.stopAll())
+  await restarted.ready()
+  expect(f.store.listTrashedConversations()[0].cleanupPending).toBe(true)
+  raw.exec('DROP TRIGGER fail_pi_purge'); raw.close()
+  await restarted.purgeConversations([f.id])
+  expect(f.store.getConversation(f.id)).toBeNull()
+  expect(f.store.listPurgeJobs()).toEqual([])
 })

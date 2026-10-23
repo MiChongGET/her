@@ -23,8 +23,8 @@ function setup(output = 'Peekaboo 4.9.3', granted: boolean | string[] = true) {
   } })
   return { deps, calls, path, home }
 }
-it('has four presets, with optional search disabled and other adapters not executable yet', () => {
-  expect(PRESETS.map(p => p.id)).toEqual(['peekaboo', 'playwright', 'markitdown', 'open-websearch'])
+it('has three MCP presets without browser automation and keeps optional search disabled', () => {
+  expect(PRESETS.map(p => p.id)).toEqual(['peekaboo', 'markitdown', 'open-websearch'])
   expect(PRESETS.find(p => p.id === 'open-websearch')?.defaultEnabled).toBe(false)
 })
 it('resolves fixed absolute native executable without terminal PATH and probes only version/permissions', async () => {
@@ -130,19 +130,17 @@ it('shutdown kills exactly its owned noncooperative probe and never starts a lat
 it('creates pinned direct Node web presets, optional search disabled, and refuses argv/env/cwd impersonation', async () => {
   const { home } = setup()
   const node = join(home, '.local/bin/node'); mkdirSync(join(node, '..'), { recursive: true }); writeFileSync(node, 'test-node', { mode: 0o755 })
-  for (const [name, version, cli] of [['@playwright/mcp', '0.0.83', 'cli.js'], ['playwright', '1.64.0-alpha-1790635538000', 'cli.js'], ['playwright-core', '1.64.0-alpha-1790635538000', 'cli.js'], ['open-websearch', '2.2.0', 'build/index.js']]) {
+  for (const [name, version, cli] of [['open-websearch', '2.2.0', 'build/index.js']]) {
     const root = join(home, '.local/share/her/dependencies/web-tools-v1/node_modules', name)
     mkdirSync(join(root, cli, '..'), { recursive: true }); writeFileSync(join(root, 'package.json'), JSON.stringify({ name, version })); writeFileSync(join(root, cli), '// fixture')
   }
   const deps = new PresetDependencies({ home, run: async () => 'v24.14.0', verifyPackage: async () => true })
-  const browser = await deps.webPreset('playwright')
-  expect(browser.command).toBe(realpathSync(node)); expect(browser.args).toContain('--extension'); expect(browser.args).toContain('--no-webmcp')
-  expect(browser.args?.some(arg => arg.includes('.superpowers'))).toBe(false)
-  await expect(deps.verifyWebPreset({ ...browser, env: browser.secretValues }, 'playwright')).resolves.toBeUndefined()
-  await expect(deps.verifyWebPreset({ ...browser, env: browser.secretValues, args: [...browser.args!, '--isolated'] }, 'playwright')).rejects.toThrow()
-  await expect(deps.verifyWebPreset({ ...browser, env: { NODE_OPTIONS: '--require /tmp/code' } }, 'playwright')).rejects.toThrow()
-  await expect(deps.verifyWebPreset({ ...browser, env: browser.secretValues, cwd: '/tmp' }, 'playwright')).rejects.toThrow()
   const search = await deps.webPreset('open-websearch')
+  expect(search.command).toBe(realpathSync(node)); expect(search.args).toEqual([join(home, '.local/share/her/dependencies/web-tools-v1/node_modules/open-websearch/build/index.js')])
+  await expect(deps.verifyWebPreset({ ...search, env: search.secretValues }, 'open-websearch')).resolves.toBeUndefined()
+  await expect(deps.verifyWebPreset({ ...search, env: search.secretValues, args: [...search.args!, '--isolated'] }, 'open-websearch')).rejects.toThrow()
+  await expect(deps.verifyWebPreset({ ...search, env: { NODE_OPTIONS: '--require /tmp/code' } }, 'open-websearch')).rejects.toThrow()
+  await expect(deps.verifyWebPreset({ ...search, env: search.secretValues, cwd: '/tmp' }, 'open-websearch')).rejects.toThrow()
   expect(search.enabled).toBe(false); expect(search.secretValues).toMatchObject({ MODE: 'stdio', SEARCH_MODE: 'request', ALLOWED_SEARCH_ENGINES: 'bing' })
 })
 it('will not trust package version metadata when the actual installed web program is different', async () => {
@@ -154,7 +152,6 @@ it('will not trust package version metadata when the actual installed web progra
   await expect(deps.webPreset('open-websearch')).rejects.toThrow()
 })
 it.each([
-  ['playwright', 'v18.20.8', 'incompatible'], ['playwright', 'v20.0.0', 'ready'],
   ['open-websearch', 'v20.18.0', 'incompatible'], ['open-websearch', 'v20.18.1', 'ready'], ['open-websearch', 'v22.0.0', 'ready']
 ])('checks locked runtime minimum for %s on %s', async (preset, version, status) => {
   const { home } = setup()
@@ -170,4 +167,20 @@ it('decorates missing diagnostics with fixed setup while retaining the diagnosti
   const [document] = await deps.checkPresetDependencies('markitdown', '')
   expect(document.setup?.command).toBe("sh '/Applications/Her.app/Contents/Resources/dependencies/markitdown/install.sh'")
   await deps.shutdown()
+})
+
+it.each(['playwright', 'ego-browser'])('does not create a removed or skill-based browser MCP preset: %s', async preset => {
+  const { deps, calls } = setup()
+  await expect(deps.checkPresetDependencies(preset, '')).rejects.toThrow('未知预设')
+  expect(calls).toHaveLength(0)
+})
+
+it('cannot confer bounded HTTP authority from a declared patched version or fixture package verifier', async () => {
+  const { home } = setup()
+  const root = join(home, '.local/share/her/dependencies/web-tools-v1/node_modules/open-websearch')
+  mkdirSync(join(root, 'build'), { recursive: true })
+  writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'open-websearch', version: '2.2.0', herRevision: 'her-request-confinement-v1' }))
+  writeFileSync(join(root, 'build/index.js'), 'not the approved patch')
+  const deps = new PresetDependencies({ home, verifyPackage: async () => true })
+  expect(await deps.webRequestConfinement()).toBe(false)
 })

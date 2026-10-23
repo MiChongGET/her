@@ -1,0 +1,148 @@
+{
+  "launchEvidence": {
+    "packaged": false,
+    "appPath": "/Users/michong/work/her",
+    "executable": "/Users/michong/work/her/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+    "electron": "44.7.0",
+    "home": "/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-b8-flow-1xDLrS"
+  },
+  "verifiedInternalDependencyLinks": [
+    {
+      "path": ".bin/node-which",
+      "target": "which/bin/node-which"
+    },
+    {
+      "path": ".bin/open-websearch",
+      "target": "open-websearch/build/index.js"
+    },
+    {
+      "path": ".bin/playwright",
+      "target": "playwright/cli.js"
+    },
+    {
+      "path": ".bin/playwright-core",
+      "target": "playwright-core/cli.js"
+    },
+    {
+      "path": ".bin/playwright-mcp",
+      "target": "@playwright/mcp/cli.js"
+    },
+    {
+      "path": ".bin/tldts",
+      "target": "tldts/bin/cli.js"
+    }
+  ],
+  "sourceTreeBeforeAndAfter": "e4f65c6b7244abe3257142a7b473ba0d6e50d65f56520397826cc6d56d049b03",
+  "ownedTreeBeforeAndAfter": "b8d9e106bc30e4877acbdea464cc333f3fac49e6794e4c0b2cff190493796598",
+  "executable": "source Electron",
+  "providerRequests": [
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    },
+    {
+      "path": "/proxy/v1/chat/completions"
+    }
+  ],
+  "rejectedSubmissionDispatches": 0,
+  "workStep": 9,
+  "delegation": {
+    "id": "fd400bc9-0ae3-46cf-9702-6ea92bfdb9bd",
+    "status": "completed",
+    "revision": 4
+  },
+  "proof": {
+    "delegationId": "fd400bc9-0ae3-46cf-9702-6ea92bfdb9bd",
+    "scopeRevision": 3,
+    "condition": "交付三家酒店公开页面的来源对照表",
+    "evidenceId": "79db4724-8bdf-48ca-9ce5-21b12f60f0bd"
+  },
+  "evidence": [
+    {
+      "id": "da8b4f8f-566d-4df6-b508-2f6e6d645d3f",
+      "kind": "receipt",
+      "scopeRevision": 1,
+      "runId": "fd2e87d0-083b-4d07-8518-c185ee8b70a3",
+      "callId": "fixture-call-3",
+      "refs": []
+    },
+    {
+      "id": "aa0481a5-bc6a-40be-9ef5-b2faf890b26a",
+      "kind": "receipt",
+      "scopeRevision": 1,
+      "runId": "fd2e87d0-083b-4d07-8518-c185ee8b70a3",
+      "callId": "fixture-call-6",
+      "refs": []
+    },
+    {
+      "id": "e950b2ff-8f8d-4acb-a12b-f7408e932093",
+      "kind": "receipt",
+      "scopeRevision": 3,
+      "runId": "20e453c4-757c-46e5-9bf2-7405f419fbc1",
+      "callId": "fixture-call-8",
+      "refs": []
+    },
+    {
+      "id": "396555ba-cd1a-493c-b2a1-c64585341758",
+      "kind": "receipt",
+      "scopeRevision": 3,
+      "runId": "20e453c4-757c-46e5-9bf2-7405f419fbc1",
+      "callId": "fixture-call-9",
+      "refs": []
+    },
+    {
+      "id": "45dff0b9-77f3-4fbe-b7d4-7a99b37e73f3",
+      "kind": "receipt",
+      "scopeRevision": 3,
+      "runId": "20e453c4-757c-46e5-9bf2-7405f419fbc1",
+      "callId": "fixture-call-10",
+      "refs": []
+    },
+    {
+      "id": "b174ef6a-1f25-4d08-9700-fa8e9268fc19",
+      "kind": "table",
+      "scopeRevision": 3,
+      "runId": "20e453c4-757c-46e5-9bf2-7405f419fbc1",
+      "refs": [
+        "e950b2ff-8f8d-4acb-a12b-f7408e932093",
+        "396555ba-cd1a-493c-b2a1-c64585341758",
+        "45dff0b9-77f3-4fbe-b7d4-7a99b37e73f3"
+      ]
+    },
+    {
+      "id": "79db4724-8bdf-48ca-9ce5-21b12f60f0bd",
+      "kind": "delivery",
+      "scopeRevision": 3,
+      "runId": "20e453c4-757c-46e5-9bf2-7405f419fbc1",
+      "refs": [
+        "b174ef6a-1f25-4d08-9700-fa8e9268fc19"
+      ]
+    }
+  ]
+}

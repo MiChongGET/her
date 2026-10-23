@@ -9,9 +9,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "electron-vite dev",
+    "dev": "electron-vite dev --watch",
     "start": "electron-vite preview",
-    "build": "electron-vite build",
+    "build": "electron-vite build && node scripts/build-notification-permission.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -7,6 +7,7 @@ export const SOURCE_PLACEHOLDER = '（资料授权或版本已失效，相关内
 export type SourceKey = string
 export const fileKey = (id: string): SourceKey => `file:${id}`
 export const grantKey = (id: string, revision: number): SourceKey => `grant:${id}@${revision}`
+export const handoffKey = (operationId: string): SourceKey => `handoff:${operationId}`
 
 export function sourceKeys(sources: FileSources | undefined): SourceKey[] {
   return [...(sources?.fileIds ?? []).map(fileKey), ...(sources?.grants ?? []).map(grant => grantKey(grant.id, grant.revision))]
@@ -56,6 +57,15 @@ export function indexBranch(branch: SessionEntry[]): SourceIndex {
     } else if (entry.type === 'custom' && entry.customType === TOOL_SOURCES) {
       const data = entry.data as { toolCallId?: string; fileSources?: FileSources } | undefined
       if (data?.toolCallId) toolSources.set(data.toolCallId, new Set(sourceKeys(data.fileSources)))
+    } else if (entry.type === 'custom_message' && entry.customType === 'her.topic-handoff') {
+      const operationId = (entry.details as { operationId?: string } | undefined)?.operationId
+      if (operationId) {
+        const key = `custom:${new Date(entry.timestamp).getTime()}:`
+        const source = handoffKey(operationId)
+        seen.add(source)
+        own.set(key, new Set([source]))
+        derived.set(key, new Set(seen))
+      }
     } else if (entry.type === 'message') {
       const message = entry.message as AnyMessage
       const key = messageKey(message)

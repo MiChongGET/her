@@ -1,3 +1,4 @@
+import { expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -34,3 +35,10 @@ export function harness(directory = mkdtempSync(join(tmpdir(), 'her-host-queue-'
   return { directory, store, profiles, host, chat, files, events, requests, id, other, state, finished, send }
 }
 
+
+/** Explicit per-call test approval; never enables a persistent grant. */
+export async function approveNextTool(chat: ChatService, conversationId: string): Promise<void> {
+  await expect.poll(() => chat.getConversationTask(conversationId)?.approval).toBeDefined()
+  const request = chat.getConversationTask(conversationId)!.approval!
+  await chat.decideApproval({ approvalId: request.id, revision: request.revision, decision: 'approve' })
+}

@@ -10,10 +10,9 @@ export interface SourceGuardOptions {
   onUse?: (keys: Set<SourceKey>) => void
 }
 
-const failClosed = <T,>(messages: T[]): T[] => messages.map(item => {
-  const message = item as unknown as { role?: string }
-  return (message.role === 'user' ? item : { ...message, content: [{ type: 'text', text: SOURCE_PLACEHOLDER }] }) as unknown as T
-})
+const failClosed = <T,>(messages: T[]): T[] => messages.map(() => ({
+  role: 'user', content: [{ type: 'text', text: SOURCE_PLACEHOLDER }], timestamp: Date.now()
+}) as unknown as T)
 
 /**
  * An inline Pi extension that stands between the stored history and every model request. Pi swallows a handler's
@@ -23,7 +22,7 @@ export function createSourceGuard(options: SourceGuardOptions): Extension {
   const handlers = new Map<string, ((...args: unknown[]) => Promise<unknown>)[]>()
   // Normal requests, tool-result follow-ups, retries and continuations after a restart all pass through here.
   handlers.set('context', [async (event: unknown) => {
-    const { messages } = event as { messages: unknown[] }
+    const messages = Array.isArray((event as { messages?: unknown[] } | null)?.messages) ? (event as { messages: unknown[] }).messages : []
     try {
       const result = filterMessages(messages, indexBranch(options.branch()), options.valid)
       options.onUse?.(result.used)

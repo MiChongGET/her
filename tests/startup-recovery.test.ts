@@ -14,7 +14,7 @@ const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms
 
 type Fixture = ReturnType<typeof harness>
 async function profile(f: Fixture, baseUrl = 'http://127.0.0.1:9') {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
 }
 /** What a crash leaves behind for one request: a claimed input, a running task, and some part of the Pi record. */
 async function crashed(f: Fixture, stage: 'claimed' | 'user-written' | 'partial-reply' | 'result-written') {
@@ -76,7 +76,7 @@ describe('start-up recovery', () => {
   it('a claimed input that never reached Pi goes back in the queue, paused, and is not sent', async () => {
     const s = await startFixtureServer('openai', 'text')
     const f = harness(), c = await crashed(f, 'claimed')
-    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const host = await restart(f)
     expect(f.store.getInput(c.requestId)).toMatchObject({ status: 'pending' })
     expect(host.getQueue(f.id)).toMatchObject({ paused: 'restart', running: false })
@@ -89,7 +89,7 @@ describe('start-up recovery', () => {
   it('an input the model may have seen is closed as interrupted and never sent again', async () => {
     const s = await startFixtureServer('openai', 'text')
     const f = harness(), c = await crashed(f, 'user-written')
-    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const host = await restart(f)
     expect(f.store.getInput(c.requestId)).toMatchObject({ status: 'cancelled' })
     expect(host.getQueue(f.id).items).toEqual([])
@@ -140,7 +140,7 @@ describe('start-up recovery', () => {
   it('an unreadable session is never resent, because whether the model saw the message is unknown', async () => {
     const s = await startFixtureServer('openai', 'text')
     const f = harness(), c = await crashed(f, 'user-written')
-    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const dir = join(f.directory, 'pi', 'sessions', f.id)
     writeFileSync(join(dir, readdirSync(dir)[0]), 'this is not a session file')
     const host = await restart(f)
@@ -177,7 +177,7 @@ describe('continuing the queue after a restart', () => {
   it('runs the waiting message once the user resumes, even though nothing has been sent since the restart', async () => {
     const s = await startFixtureServer('openai', 'text')
     const f = harness(), c = await crashed(f, 'claimed')
-    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    await f.profiles.save({ id: c.profileId, name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const requests: { requestId: string; state: string }[] = []
     const chat = new ChatService(f.store, new AgentHost(f.store, f.profiles, f.directory), () => {}, event => requests.push(event))
     await new Promise(resolve => setTimeout(resolve, 50))
@@ -197,4 +197,30 @@ describe('continuing the queue after a restart', () => {
     host.resumeQueue(f.id, { onChat: () => {}, onRequest: () => {}, systemPrompt: '' })
     await expect.poll(() => f.store.getInput(c.requestId)?.status, { timeout: 5000 }).toBe('cancelled')
   })
+})
+
+it('delegation_restart_requires_explicit_resume_without_dispatch', async () => {
+  const { DelegationService } = await import('../src/core/delegations/service')
+  const f = harness(), service = new DelegationService(f.store)
+  const intent = { id: randomUUID(), messageId: randomUUID(), conversationId: f.id, text: '比较酒店', source: 'user' as const, kind: 'unclassified' as const, spans: [] }
+  f.store.saveUserIntent(intent)
+  service.admitIntent(intent, { id: 'scope', revision: 1, evidenceSpans: [[0, 4]], scope: {
+    purpose: '比较酒店', objects: ['hotel:a'], completion: '比较表已保存', allowedCapabilities: ['http.read'], origins: [], constraints: {}
+  } })
+  const d = service.approveScope('scope', 1)
+  const s = await startFixtureServer('openai', 'text')
+  try {
+    const p = await profile(f, s.baseUrl), requestId = randomUUID(), taskId = randomUUID()
+    f.store.enqueueInput(d.conversationId, intent.text, null, requestId, { profileId: p.id, model: 'test-model', userMessageId: randomUUID() })
+    f.store.bindDelegationInput(requestId, intent.id, d.id)
+    f.store.claimInput(requestId)
+    f.store.createTask({ id: taskId, conversationId: d.conversationId, requestId, generation: 0, status: 'running', serviceId: p.id, modelId: 'test-model', configRevision: 1, error: null })
+    service.attachRun(d.id, taskId)
+    const host = await restart(f)
+    expect(host.delegations.get(d.id)).toMatchObject({ status: 'active', resumeRequired: true })
+    expect(f.store.getDelegationForRun(taskId)?.id).toBe(d.id)
+    await wait(100)
+    expect(s.requests).toHaveLength(0)
+    await host.stopAll()
+  } finally { await s.close() }
 })

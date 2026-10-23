@@ -54,18 +54,19 @@ function delayedCodec(operation: 'encrypt' | 'decrypt') {
 }
 
 describe('MCP configuration', () => {
-  it('persists explicit all-conversation automation across restart and preserves it on unrelated saves', async () => {
+  it('ignores legacy global grants after restart and rejects all new writes of the retired field', async () => {
     const file = path(), { service, store } = setup(file)
     const initial = await service.save(stdio)
-    expect(initial.allowAllOperations).toBe(false)
-    const allowed = await service.save({ ...stdio, id: initial.id, expectedRevision: initial.revision, allowAllOperations: true })
+    const persisted = store.getMcpService(initial.id)!
+    store.saveMcpService({ ...persisted, config: { ...persisted.config, allowAllOperations: true } }, initial.revision)
     store.close(); stores.splice(stores.indexOf(store), 1)
     const reopened = setup(file).service
-    expect((await reopened.resolve(initial.id)).allowAllOperations).toBe(true)
-    const renamed = await reopened.save({ ...stdio, id: initial.id, expectedRevision: allowed.revision, name: '改名' })
-    expect(renamed.allowAllOperations).toBe(true)
-    expect((await reopened.save({ ...renamed, expectedRevision: renamed.revision, allowAllOperations: false })).allowAllOperations).toBe(false)
-    await expect(reopened.save({ ...stdio, allowAllOperations: 'true' } as unknown as SaveMcpServiceInput)).rejects.toThrow(/自动操作/)
+    expect(reopened.list()[0]).not.toHaveProperty('allowAllOperations')
+    expect(await reopened.resolve(initial.id)).not.toHaveProperty('allowAllOperations')
+    for (const value of [true, false, 'true']) await expect(reopened.save({ ...stdio, allowAllOperations: value } as unknown as SaveMcpServiceInput)).rejects.toThrow(/自动操作/)
+    const renamed = await reopened.save({ ...stdio, id: initial.id, expectedRevision: initial.revision, name: '改名' })
+    expect(renamed.name).toBe('改名')
+    expect(renamed).not.toHaveProperty('allowAllOperations')
   })
 
   it('reads actual environment values for disabled services without exposing HTTP headers or changing encrypted storage', async () => {
@@ -131,7 +132,7 @@ describe('MCP configuration', () => {
   it('service_survives_restart with secrets, revision, test and unchanged settings/profile', async () => {
     const file = path()
     const { service, store } = setup(file)
-    const settings = { activeProfileId: null, shortcut: 'Custom', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: true, systemPrompt: '保留' }
+    const settings = { activeProfileId: null, shortcut: 'Custom', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: true, appearance: 'light' as const, systemPrompt: '保留' }
     store.setSettings(settings)
     const saved = await service.save({ ...http, secretValues: { Authorization: 'restart-secret' } })
     service.recordTest(saved.id, saved.revision, { status: 'passed', message: 'connected' })

@@ -12,7 +12,7 @@ async function server(scenario: Scenario | Scenario[], options: Parameters<typeo
   const s = await startFixtureServer('openai', scenario, options); cleanup.push(s.close); return s
 }
 async function profile(f: Fixture, baseUrl: string) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
 }
 /** A task that ended (stopped) after dispatching an action whose outcome is unknown, with its target quarantined. */
 function stoppedWithUnknown(f: Fixture, options: { conversationId?: string; target?: string; callId?: string; taskId?: string } = {}) {

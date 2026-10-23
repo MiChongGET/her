@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type {
-  ConnectionTestResult, ProviderProfile, RuntimeProvider, SaveProfileInput, ServiceModel, TestKind
+  CatalogModel, ConnectionTestResult, ProviderProfile, RuntimeProvider, SaveProfileInput, ServiceModel, TestKind
 } from '../../shared/types'
 import { HerStore, untestedConnections, type StoredProfile } from './store'
 
@@ -31,6 +31,8 @@ function publicProfile(profile: StoredProfile): ProviderProfile {
     baseUrl: profile.baseUrl,
     model: profile.defaultModel,
     models,
+    ...(profile.models.find(model => model.id === profile.defaultModel)?.catalogProvider ? { catalogProvider: profile.models.find(model => model.id === profile.defaultModel)!.catalogProvider } : {}),
+    ...(profile.contextWindow !== null ? { contextWindow: profile.contextWindow } : {}),
     authMethod: profile.authMethod,
     hasApiKey: profile.hasApiKey,
     hasCustomHeaders: profile.hasCustomHeaders,
@@ -40,6 +42,8 @@ function publicProfile(profile: StoredProfile): ProviderProfile {
 
 function validate(input: SaveProfileInput): ValidatedInput {
   if (!input || typeof input !== 'object') throw new Error('模型配置不正确。')
+  if (!['api-key', 'headers', 'none'].includes(input.authMethod)) throw new Error('请选择有效的认证方式。')
+  if (!input.catalogProvider && input.contextWindow == null) throw new Error('请填写自定义服务的上下文容量。')
   if (input.protocol !== 'openai' && input.protocol !== 'anthropic' && input.protocol !== 'openai-responses') throw new Error('请选择有效的服务协议。')
   for (const field of ['name', 'baseUrl', 'model'] as const) {
     if (typeof input[field] !== 'string' || !input[field].trim() || input[field].length > 2048) {
@@ -91,6 +95,8 @@ function validate(input: SaveProfileInput): ValidatedInput {
 }
 
 export class ProfileService {
+  private catalog?: Promise<CatalogModel[]>
+
   private readonly saving = new Set<string>()
 
   private readonly listeners = new Set<(profileId: string, reason: 'deleted' | 'connection-changed') => void>()
@@ -107,9 +113,27 @@ export class ProfileService {
 
   list(): ProviderProfile[] { return this.store.listProfiles().map(publicProfile) }
 
+  listCatalog(): Promise<CatalogModel[]> {
+    return this.catalog ??= (async () => {
+      const { ModelRuntime } = await import('@earendil-works/pi-coding-agent')
+      const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false, credentials: {
+        read: async () => undefined, list: async () => [], modify: async () => {}, delete: async () => {}
+      } })
+      return runtime.getModels().flatMap(model => {
+        const protocol = model.api === 'openai-completions' ? 'openai' : model.api === 'anthropic-messages' ? 'anthropic' : model.api === 'openai-responses' ? 'openai-responses' : undefined
+        return protocol ? [{ provider: model.provider, id: model.id, name: model.name, protocol, baseUrl: model.baseUrl,
+          contextWindow: model.contextWindow, maxOutputTokens: model.maxTokens, multimodal: model.input.includes('image') }] : []
+      })
+    })()
+  }
+
   async save(rawInput: SaveProfileInput): Promise<ProviderProfile> {
     this.lifetime?.throwIfAborted()
-    const input = validate(rawInput)
+    const catalog = rawInput?.catalogProvider ? await this.listCatalog() : []
+    const selected = catalog.find(model => model.provider === rawInput.catalogProvider && model.id === rawInput.model)
+    if (rawInput?.catalogProvider && !selected) throw new Error('目录中没有这个模型，请重新选择。')
+    const input = validate(selected ? { ...rawInput, protocol: selected.protocol, baseUrl: selected.baseUrl,
+      contextWindow: selected.contextWindow, maxOutputTokens: selected.maxOutputTokens } : rawInput)
     const id = input.id ?? randomUUID()
     if (this.saving.has(id)) throw new Error('该服务正在保存，请稍后再试。')
     this.saving.add(id)
@@ -121,29 +145,34 @@ export class ProfileService {
         (input.customHeaders === undefined && previous.hasCustomHeaders)
       )
       const oldSecrets = preserveSecrets ? await this.readSecrets(previous) : { apiKey: '', customHeaders: {} }
-      const secrets = {
+      let secrets = {
         apiKey: input.apiKey === undefined ? oldSecrets.apiKey : input.apiKey.trim(),
         customHeaders: input.customHeaders === undefined ? oldSecrets.customHeaders : input.customHeaders
       }
+      if (input.authMethod === 'none') secrets = { apiKey: '', customHeaders: {} }
+      else if (input.authMethod === 'headers') secrets.apiKey = ''
       const hasApiKey = !!secrets.apiKey
       const hasCustomHeaders = Object.keys(secrets.customHeaders).length > 0
       const sealedSecrets = hasApiKey || hasCustomHeaders
         ? (await this.codec.encrypt(JSON.stringify(secrets))).toString('base64')
         : null
-      const connectionChanged = !previous || previous.protocol !== input.protocol ||
+      const connectionChanged = !previous || previous.protocol !== input.protocol || previous.authMethod !== input.authMethod ||
         previous.baseUrl !== input.baseUrl ||
         (!preserveSecrets && !!previous.sealedSecrets) ||
         JSON.stringify(oldSecrets) !== JSON.stringify(secrets)
       this.lifetime?.throwIfAborted()
       const latest = this.store.getProfile(id)
       if (input.id && !latest) throw new Error('该服务已经不存在。')
-      const maxOutputTokens = input.protocol !== 'anthropic' ? null
-        : input.maxOutputTokens === undefined ? previous?.maxOutputTokens ?? null
-        : input.maxOutputTokens
-      const models: ServiceModel[] = input.models.map(item => ({
-        id: item.id, longOutput: item.longOutput, multimodal: item.multimodal,
-        tests: connectionChanged ? untestedConnections() : latest!.models.find(old => old.id === item.id)?.tests ?? untestedConnections()
-      }))
+      const maxOutputTokens = input.maxOutputTokens === undefined ? previous?.maxOutputTokens ?? null : input.maxOutputTokens
+      const models: ServiceModel[] = input.models.map(item => {
+        const catalogModel = input.catalogProvider ? catalog.find(model => model.provider === input.catalogProvider && model.id === item.id) : undefined
+        if (input.catalogProvider && !catalogModel) throw new Error('目录中没有这个模型，请重新选择。')
+        return {
+          id: item.id, longOutput: catalogModel ? false : item.longOutput, multimodal: catalogModel?.multimodal ?? item.multimodal,
+          ...(input.catalogProvider ? { catalogProvider: input.catalogProvider } : {}),
+          tests: connectionChanged ? untestedConnections() : latest!.models.find(old => old.id === item.id)?.tests ?? untestedConnections()
+        }
+      })
       const profile: StoredProfile = {
         id,
         name: input.name,
@@ -173,12 +202,13 @@ export class ProfileService {
     if (!entry) throw new Error('该服务没有这个模型，请重新选择。')
     const secrets = await this.readSecrets(profile)
     this.lifetime?.throwIfAborted()
-    const maxOutputTokens = entry.longOutput ? LONG_OUTPUT_TOKENS : profile.maxOutputTokens
+    const catalogModel = entry.catalogProvider ? (await this.listCatalog()).find(model => model.provider === entry.catalogProvider && model.id === entry.id) : undefined
+    const maxOutputTokens = catalogModel ? catalogModel.maxOutputTokens : entry.longOutput ? LONG_OUTPUT_TOKENS : profile.maxOutputTokens
     return {
       id: profile.id, name: profile.name, protocol: profile.protocol,
       baseUrl: profile.baseUrl, model: entry.id, multimodal: entry.multimodal, ...secrets,
       ...(maxOutputTokens !== null ? { maxOutputTokens } : {}),
-      ...(profile.contextWindow !== null ? { contextWindow: profile.contextWindow } : {})
+      ...(catalogModel ? { contextWindow: catalogModel.contextWindow } : profile.contextWindow !== null ? { contextWindow: profile.contextWindow } : {})
     }
   }
 

@@ -20,11 +20,10 @@ describe('Pi tool gate', () => {
     expect(setup('read').tools.map(tool => tool.name)).toEqual(['act'])
   })
 
-  it('runs read actions and returns Pi content', async () => {
+  it('an unverified read cannot dispatch just because of its effect label', async () => {
     const s = setup('read')
-    const result = await s.call('act', { target: 'a' })
-    expect(result.content).toEqual([{ type: 'text', text: 'done' }])
-    expect(s.dispatched).toEqual([{ target: 'a' }])
+    await expect(s.call('act', { target: 'a' })).rejects.toThrow('需要用户确认')
+    expect(s.dispatched).toEqual([])
   })
 
   it('does not execute invalid arguments', async () => {

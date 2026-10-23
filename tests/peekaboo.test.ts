@@ -103,7 +103,7 @@ it('restricts discovery schemas and hidden dispatch using the real registry adap
   expect(await registry.execute(mcpToolName('service', 'agent'), {}, h.context)).toMatchObject({ isError: true })
   expect(await registry.execute(mcpToolName('service', 'see'), { path: '/tmp/user' }, h.context)).toMatchObject({ isError: true })
 })
-it('the saved all-operation permission covers native app actions in different conversations', async () => {
+it('legacy all-operation permission still requires exact approval in each conversation', async () => {
   const h = setup(), registry = new SimpleToolRegistry(), adapter = new McpRegistryAdapter(registry, 'Peekaboo')
   const sent: Record<string, unknown>[] = []
   adapter.register('service', 1, [{ name: 'app', inputSchema: { type: 'object', properties: { action: { type: 'string' }, name: { type: 'string' } } } }], h.policy, () => true,
@@ -118,7 +118,7 @@ it('the saved all-operation permission covers native app actions in different co
     await registry.execute(mcpToolName('service', 'app'), { action: 'launch', name: 'TextEdit' }, { ...h.context, conversationId,
       authorize: (assessment, checked) => approvals.authorize(checked.callId, assessment, checked) })
   }
-  expect(prompts).toBe(0)
+  expect(prompts).toBe(2)
   expect(sent).toEqual([{ action: 'launch', name: 'TextEdit', foreground: true }, { action: 'launch', name: 'TextEdit', foreground: true }])
 })
 
@@ -157,11 +157,11 @@ it('waits for overwrite approval then preserves the exact snapshot, element, cle
   const args = { snapshot: 'native-opaque', on: 'native-element', text: '完整原文\n中文替换。', clear: true }
   const original = structuredClone(args)
   const pending = registry.execute('type', args, { ...h.context, authorize: async (assessment, context) => {
-    expect(assessment.effect).toBe('overwrite')
+    expect(assessment.effect).toBe('unknown') // No trusted action descriptor; the label cannot grant authority.
     await approvals.authorize('call', assessment, context)
   } })
   const approval = await request
-  expect(approval.summary).toContain(JSON.stringify(original))
+  expect(approval.preview.fields).toContainEqual({ label: '原始工具参数', value: JSON.stringify(original) })
   expect(h.calls.map(call => call.name)).toEqual(['see'])
   approvals.decide({ approvalId: approval.id, revision: approval.revision, decision: 'approve' })
   expect((await pending).isError).toBe(true) // No confirmed native effect in this fixture: still unknown.
@@ -246,7 +246,7 @@ it('a desktop action that waited for the queue cannot reuse the observation the 
       if (remote === 'see') return structuredClone(receipt())
       clicks.push(wire); await held; return { content: [{ type: 'text', text: 'clicked' }] }
     }), true)
-  const context = { ...h.context, resources: queue }
+  const context = { ...h.context, resources: queue, authorize: async () => {} }
   await registry.execute(mcpToolName('service', 'see'), { app_target: 'PID:12', window_id: 45 }, context)
   const args = { snapshot: 'native-opaque', on: 'native-element' }
   const first = registry.execute(mcpToolName('service', 'click'), args, { ...context, callId: 'first' })

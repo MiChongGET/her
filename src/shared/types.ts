@@ -10,7 +10,19 @@ export interface ConnectionTestResult {
   checkedAt?: string
 }
 
+export interface CatalogModel {
+  provider: string
+  id: string
+  name: string
+  protocol: ProviderProtocol
+  baseUrl: string
+  contextWindow: number
+  maxOutputTokens: number
+  multimodal: boolean
+}
+
 export interface ServiceModel {
+  catalogProvider?: string
   id: string
   longOutput: boolean
   multimodal: boolean
@@ -19,6 +31,7 @@ export interface ServiceModel {
 
 // Task 3.1: Service profile supporting Pi directory models and custom compatible services
 export interface ProviderProfile {
+  catalogProvider?: string
   id: string
   name: string
   protocol: ProviderProtocol
@@ -34,6 +47,7 @@ export interface ProviderProfile {
 }
 
 export interface SaveProfileInput {
+  catalogProvider?: string
   id?: string
   name: string
   protocol: ProviderProtocol
@@ -68,7 +82,6 @@ export interface McpServiceConfig extends McpTransportConfig {
 }
 
 export interface SaveMcpServiceInput extends McpTransportConfig {
-  allowAllOperations?: boolean
   id?: string
   name: string
   presetId?: string
@@ -169,6 +182,105 @@ export type ProviderEvent =
   | { type: 'tool'; id: string; name: string; arguments: Record<string, unknown> }
   | { type: 'done' }
 
+export interface TopicInfo {
+  conversationId: string
+  kind: 'daily' | 'work'
+  shareProgress: boolean
+  shareRevision: number
+}
+
+export interface TopicHandoffPreview {
+  id: string
+  digest: string
+  sourceConversationId: string
+  excerpts: { messageId: string; role: 'user' | 'assistant'; text: string; createdAt: string }[]
+  receiverLabel: string
+  omittedCount: number
+  crossServiceReplyCount?: number
+}
+
+export interface TopicHandoffOperation {
+  operationId: string
+  status: 'preparing' | 'created' | 'failed'
+  conversationId?: string
+  errorCode?: 'source-changed' | 'receiver-changed' | 'storage-failed'
+}
+
+export interface MemorySourceRef {
+  kind: 'pi-entry' | 'memory' | 'progress'
+  id: string
+  revision: number
+  conversationId: string
+  sessionId?: string
+  entryId?: string
+}
+
+export interface MemorySourceDependencies {
+  memorySources: MemorySourceRef[]
+  fileSources: FileSources
+}
+
+export type MemoryScope = { kind: 'personal' } | { kind: 'work'; conversationId: string }
+
+export interface MemoryRecord {
+  id: string
+  content: string
+  revision: number
+  scope: MemoryScope
+  status: 'active' | 'superseded' | 'excluded'
+  sources: MemorySourceRef[]
+  validFrom: string
+  validUntil?: string
+}
+
+export interface MemoryEntryBaseline {
+  conversationId: string
+  sessionId: string
+  entryIds: string[]
+}
+
+export interface WorkspaceSelection {
+  section: 'daily' | 'work' | 'memory'
+  conversationId?: string
+}
+
+export interface PendingActionNotice {
+  id: string
+  status: 'waiting_approval' | 'paused' | 'unknown'
+  version: number
+}
+
+export interface WorkspaceListItem {
+  conversation: ConversationSummary
+  topic: TopicInfo | null
+}
+
+export interface WorkspaceSnapshot {
+  activeRequest?: { requestId: string; conversationId: string } | null
+  selection: WorkspaceSelection
+  version: number
+  conversation: ConversationSummary | null
+  topic: TopicInfo | null
+  messages: ChatMessage[]
+  task: TaskEvent | null
+  workItems: WorkspaceListItem[]
+}
+
+export interface WorkspaceChatEvent {
+  selectionVersion: number
+  event: ChatEvent
+}
+
+export interface WorkspaceRequestEvent {
+  selectionVersion: number
+  event: RequestEvent
+}
+
+export interface WorkspaceTaskEvent {
+  selectionVersion: number
+  event: TaskEvent
+}
+
 export interface ConversationSummary {
   id: string
   title: string
@@ -179,6 +291,8 @@ export interface ConversationSummary {
 }
 
 export interface TrashedConversation extends ConversationSummary {
+  cleanupPending?: boolean
+  cleanupError?: string
   deletedAt: string
 }
 
@@ -214,12 +328,16 @@ export interface ArtifactReference {
   sourceFileId?: string
 }
 
+export type DelegationStatus = 'active' | 'paused' | 'completed' | 'cancelled'
+
 export interface TaskRun {
+  delegationId?: string
+  scopeRevision?: number
   id: string
   requestId: string
   conversationId: string
   assistantMessageId: string
-  status: 'running' | 'awaiting_confirmation' | 'paused' | 'stopped' | 'completed' | 'failed'
+  status: 'queued' | 'running' | 'awaiting_confirmation' | 'waiting_approval' | 'waiting_resource' | 'compacting' | 'retrying' | 'stopping' | 'paused' | 'stopped' | 'completed' | 'failed' | 'interrupted'
   providerId: string
   model: string
   toolCallsCount: number
@@ -243,7 +361,16 @@ export interface ToolCallRecord {
   resolution?: { decision: 'handled' | 'abandoned'; resolvedAt: string }
 }
 
+export interface TokenUsage {
+  input: number | null
+  output: number | null
+}
+
 export interface ChatMessage {
+  /** Local persisted control status, not a model-authored answer. */
+  hostStatus?: boolean
+  interrupted?: boolean
+  usage?: TokenUsage
   id: string
   conversationId: string
   role: 'user' | 'assistant'
@@ -259,18 +386,31 @@ export interface ChatMessage {
   toolCalls?: ToolCallRecord[]
 }
 
+export type Appearance = 'light' | 'dark' | 'system'
+
 export interface DesktopSettings {
   activeProfileId: string | null
   shortcut: string
   stopShortcut: string
   launchAtLogin: boolean
+  appearance: Appearance
   systemPrompt?: string
+  disabledSkillIds?: string[]
+}
+
+export interface BuiltinSkill {
+  id: string
+  name: string
+  description: string
+  version: string
+  sourceUrl: string
+  content: string
+  enabled: boolean
 }
 
 export interface BootstrapState {
-  activeRequest?: { requestId: string; conversationId: string } | null
   profiles: ProviderProfile[]
-  conversations: ConversationSummary[]
+  dailyConversationId: string
   settings: DesktopSettings
   appVersion: string
   dataDirectory: string
@@ -284,10 +424,13 @@ export interface SendMessageInput {
   content: string
   retryMessageId?: string
   fileIds?: string[]
+  attachmentOnly?: boolean
   attachments?: MessageAttachment[]
 }
 
 export interface SendMessageResult {
+  /** Opaque priority-control identity; details remain in the original topic. */
+  controlId?: string
   userMessage: ChatMessage
   assistantMessage: ChatMessage
   /** True when the conversation was busy and the message waits in the queue. */
@@ -305,6 +448,12 @@ export interface QueuedInput {
   profileId: string | null
   model: string | null
   createdAt: string
+}
+
+/** Pi's estimate of the last observed context, not cumulative billed usage. */
+export interface ConversationContextUsage {
+  tokens: number | null
+  contextWindow: number
 }
 
 export interface CompactConversationInput {
@@ -330,7 +479,20 @@ export interface ActionAssessment {
   observationId?: string
 }
 
+export interface ActionPreview {
+  fields: { label: string; value: string }[]
+  finalText?: string
+  recipient?: string
+  transferDestination?: string
+}
+
 export interface ApprovalRequest {
+  purpose: string
+  preview: ActionPreview
+  dataClasses: string[]
+  providerName?: string
+  scopeSummary: string
+  actionLabel: string
   id: string
   runId: string
   callId: string
@@ -343,7 +505,7 @@ export interface ApprovalRequest {
 export interface ApprovalDecisionInput {
   approvalId: string
   revision: string
-  decision: 'approve' | 'reject' | 'approve-conversation'
+  decision: 'approve' | 'reject'
 }
 
 export interface UnknownToolCall {
@@ -363,6 +525,9 @@ export interface ResolveUnknownToolCallInput {
 }
 
 export interface TaskEvent {
+  runId?: string
+  seq?: number
+  generation?: number
   browserAutoApproved?: boolean
   unknownCalls?: UnknownToolCall[]
   requestId: string
@@ -379,6 +544,9 @@ export interface ContinueTaskInput {
 }
 
 export interface RequestEvent {
+  runId?: string
+  seq?: number
+  generation?: number
   requestId: string
   conversationId: string
   state: 'started' | 'completed' | 'cancelled' | 'failed'
@@ -386,6 +554,9 @@ export interface RequestEvent {
 }
 
 export interface ChatEvent {
+  runId?: string
+  seq?: number
+  generation?: number
   requestId: string
   conversationId: string
   message: ChatMessage
@@ -399,13 +570,65 @@ export interface SelectFilesInput {
   scope: 'conversation' | 'persistent'
 }
 
+/** Selected original work-topic cards only; never included in bootstrap or notices. */
+export interface DelegationScopeView {
+  purpose: string
+  objects: string[]
+  completion: string
+  allowedCapabilities: string[]
+  origins: string[]
+  constraints: Record<string, string | number>
+}
+export interface DelegationControlRevision { id: string; revision: number }
+export interface DelegationControlInput {
+  conversationId: string
+  controlId: string
+  revision: number
+}
+export interface DelegationControlChoiceInput extends DelegationControlInput {
+  releaseOwnedInputs?: boolean
+  kind: 'pause' | 'cancel' | 'revise' | 'ordinary'
+  delegationIds: string[]
+  candidateRevisions?: { delegationId: string; currentRevision: number }[]
+}
+export interface DelegationDenialInput extends DelegationControlInput {
+  delegationId: string
+  scopeRevision: number
+  denialId: string
+}
+export interface DelegationDetails {
+  conversationId: string
+  delegations: { id: string; revision: number; status: DelegationStatus; resumeRequired: boolean; scope: DelegationScopeView; canResume: boolean; resumeControls: DelegationControlRevision[] }[]
+  scopes: { id: string; revision: number; scope: DelegationScopeView }[]
+  controls: {
+    id: string; revision: number; kind: 'pause' | 'cancel' | 'revise' | 'uncertain' | 'withdraw'; effect: 'mutation' | 'all' | 'budget'; budget?: number
+    resolution?: 'pause' | 'cancel' | 'revise' | 'ordinary' | 'withdraw'
+    hasOwnedInputs?: boolean
+    candidates: { delegationId: string; scopeRevision: number; currentRevision: number; purpose: string; denials: { id: string; target: string; capability: string; businessEffect?: string; dataClasses: string[] }[] }[]
+    selection?: { delegationId: string; scopeRevision: number; denialId: string }
+  }[]
+}
+
 export interface HerApi {
+  previewTopicHandoff(input: { conversationId: string; messageIds: string[] }): Promise<TopicHandoffPreview>
+  commitTopicHandoff(input: { operationId: string; previewId: string; digest: string }): Promise<TopicHandoffOperation>
+  getTopicHandoffOperation(operationId: string): Promise<TopicHandoffOperation | null>
+  getDelegationDetails(conversationId: string): Promise<DelegationDetails>
+  pauseDelegation(id: string, revision: number): Promise<void>
+  cancelDelegation(id: string, revision: number): Promise<void>
+  resumeDelegation(id: string, revision: number, controls?: DelegationControlRevision[]): Promise<void>
+  approveDelegationScope(proposalId: string, revision: number): Promise<void>
+  rejectDelegationScope(proposalId: string, revision: number): Promise<void>
+  resolveDelegationControl(input: DelegationControlChoiceInput): Promise<void>
+  prepareDelegationDenial(input: DelegationDenialInput): Promise<void>
+  confirmDelegationDenial(input: DelegationControlInput): Promise<void>
   addDroppedFiles(conversationId: string, files: File[]): Promise<FileReference[]>
   listPersistentFileGrants(): Promise<FileGrant[]>
   openFileSource(input: { conversationId: string; fileId: string }): Promise<void>
   getFilePreview(input: { conversationId: string; fileId: string }): Promise<{ mimeType: string; dataUrl: string }>
 
   selectFiles(input: SelectFilesInput): Promise<{ grants: FileGrant[]; files: FileReference[] }>
+  validateDraftFiles(input: { conversationId: string; fileIds: string[] }): Promise<{ valid: FileReference[]; invalidIds: string[] }>
   listFileGrants(conversationId: string): Promise<FileGrant[]>
   revokeFileGrant(id: string): Promise<void>
   listMcpPresets(): Promise<McpPreset[]>
@@ -424,21 +647,31 @@ export interface HerApi {
   revokeConversationApprovals(conversationId: string): Promise<void>
   resolveUnknownToolCall(input: ResolveUnknownToolCallInput): Promise<TaskEvent | null>
   continueTask(input: ContinueTaskInput): Promise<SendMessageResult>
+  getConversationContext(input: CompactConversationInput): Promise<ConversationContextUsage>
   getQueue(conversationId: string): Promise<ConversationQueueState>
   cancelQueuedMessage(conversationId: string, requestId: string): Promise<void>
   resumeQueue(conversationId: string): Promise<void>
   compactConversation(input: CompactConversationInput): Promise<void>
   stopCompaction(conversationId: string): Promise<void>
   switchModel(input: CompactConversationInput): Promise<void>
-  onRequestEvent(callback: (event: RequestEvent) => void): () => void
-  onTaskEvent(callback: (event: TaskEvent) => void): () => void
+  onWorkspaceRequestEvent(callback: (event: WorkspaceRequestEvent) => void): () => void
+  onWorkspaceTaskEvent(callback: (event: WorkspaceTaskEvent) => void): () => void
   getArtifactPreview(id: string, conversationId: string): Promise<{ mimeType: string; dataUrl: string }>
   getBootstrap(): Promise<BootstrapState>
+  listModelCatalog(): Promise<CatalogModel[]>
   saveProfile(input: SaveProfileInput): Promise<ProviderProfile>
   deleteProfile(id: string): Promise<void>
   selectProfile(id: string): Promise<void>
   testProfile(id: string, kind: TestKind, model?: string): Promise<ConnectionTestResult>
-  createConversation(): Promise<ConversationSummary>
+  selectWorkspace(selection: WorkspaceSelection): Promise<WorkspaceSnapshot>
+  listWorkItems(): Promise<WorkspaceListItem[]>
+  getPendingActions(): Promise<PendingActionNotice[]>
+  resolvePendingAction(input: { id: string; version: number }): Promise<{ conversationId: string } | null>
+  getPendingActionOpen(): Promise<PendingActionNotice | null>
+  ackPendingActionOpen(input: { id: string; version: number }): Promise<void>
+  onPendingActionOpen(callback: () => void): () => void
+  onPendingActions(callback: (notices: PendingActionNotice[]) => void): () => void
+  createConversation(): Promise<WorkspaceSnapshot>
   renameConversation(id: string, title: string): Promise<ConversationSummary>
   trashConversation(id: string): Promise<void>
   restoreConversation(id: string): Promise<ConversationSummary>
@@ -449,10 +682,13 @@ export interface HerApi {
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>
   cancelMessage(requestId: string): Promise<void>
   setDesktopPreferences(input: { shortcut: string; stopShortcut: string; launchAtLogin: boolean }): Promise<DesktopSettings>
+  setAppearance(appearance: Appearance): Promise<DesktopSettings>
   getSystemPrompt(): Promise<string>
+  listSkills(): Promise<BuiltinSkill[]>
+  setSkillEnabled(id: string, enabled: boolean): Promise<BuiltinSkill[]>
   setSystemPrompt(prompt: string): Promise<void>
   getDefaultSystemPrompt(): Promise<string>
-  onChatEvent(callback: (event: ChatEvent) => void): () => void
+  onWorkspaceChatEvent(callback: (event: WorkspaceChatEvent) => void): () => void
   openExternal(url: string): Promise<void>
 }
 

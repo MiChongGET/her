@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SimpleToolRegistry } from '../src/core/tools/registry'
 import { SOURCE_PLACEHOLDER } from '../src/core/agent/sources'
 import { startFixtureServer, TOOL_NAME, type Scenario } from './pi-sdk/wire'
-import { harness, harnessCleanup } from './helpers/host-harness'
+import { approveNextTool, harness, harnessCleanup } from './helpers/host-harness'
 import type { FileReference } from '../src/shared/types'
 
 const cleanup: (() => void | Promise<void>)[] = []
@@ -30,7 +30,7 @@ async function server(scenario: Scenario | Scenario[], options: Parameters<typeo
   const s = await startFixtureServer('openai', scenario, { measuredUsage: true, ...options }); cleanup.push(s.close); return s
 }
 async function profile(f: ReturnType<typeof harness>, baseUrl: string, extra: object = {}) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none', ...extra })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none', ...extra })
 }
 function gated() {
   let release!: () => void
@@ -62,13 +62,27 @@ const entriesOf = async (f: ReturnType<typeof harness>) => {
   const { openConversationHistory } = await import('../src/core/agent/factory')
   return (await openConversationHistory(f.directory, f.store.getConversation(f.id)!)).manager.getEntries()
 }
-async function say(f: ReturnType<typeof harness>, profileId: string, content: string, fileIds?: string[]) {
+async function say(f: ReturnType<typeof harness>, profileId: string, content: string, fileIds?: string[], approveTool = false) {
   const sent = await f.send(f.id, profileId, content, randomUUID(), fileIds)
+  if (approveTool) await approveNextTool(f.chat, f.id)
   await expect.poll(() => f.finished(sent.requestId)?.state, { timeout: 15_000 }).toBe('completed')
   return sent
 }
 
 describe('sending files (7.1)', () => {
+  it.each([
+    { name: 'picture.png', content: solidPng(64, 64) },
+    { name: 'notes.txt', content: 'plain notes' }
+  ])('keeps $name in the immediate send result so the sent message displays its attachment', async ({ name, content }) => {
+    const s = await server('text')
+    const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl, { models: [{ id: 'test-model', multimodal: true }] })
+    const file = await attach(f, name, content)
+    const sent = await f.send(f.id, p.id, 'look at this', randomUUID(), [file.reference.id])
+    expect(sent.result.userMessage.files).toEqual([file.reference])
+    expect(JSON.stringify(sent.result.userMessage)).not.toContain(file.path)
+    await expect.poll(() => f.finished(sent.requestId)?.state).toBe('completed')
+  })
+
   it('sends an authorised file as a reference block for the model while the chat shows what was typed, with the file attached', async () => {
     const s = await server('text')
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl)
@@ -141,7 +155,7 @@ describe('sending files (7.1)', () => {
       const registry = readerTool(f, file.reference.id)
       ;(f.host as unknown as { toolsFor: unknown }).toolsFor = async () => registry.snapshot()
       if (change === 'delete') rmSync(file.path); else writeFileSync(file.path, 'REPLACED BODY OF A DIFFERENT SIZE')
-      await say(f, p.id, 'read it')
+      await say(f, p.id, 'read it', undefined, true)
       const second = bodies(s)[1]
       expect(second).not.toContain('READ-ME-BODY')
       expect(second).not.toContain('REPLACED BODY')
@@ -152,7 +166,7 @@ describe('sending files (7.1)', () => {
     const s = await server('text')
     const f = harness(undefined, undefined, true)
     const blind = await profile(f, s.baseUrl)
-    const sighted = await f.profiles.save({ name: 'v', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'vision-model', authMethod: 'none', models: [{ id: 'vision-model', multimodal: true }] })
+    const sighted = await f.profiles.save({ name: 'v', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'vision-model', contextWindow: 128000, authMethod: 'none', models: [{ id: 'vision-model', multimodal: true }] })
     const png = solidPng(64, 64)
     const picture = await attach(f, 'pic.png', png)
     await expect(f.send(f.id, blind.id, 'what is this', randomUUID(), [picture.reference.id])).rejects.toThrow('不支持视觉')
@@ -185,7 +199,7 @@ describe('provenance records (7.2)', () => {
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl, { authMethod: 'api-key', apiKey: 'sk-secret-credential' })
     const attached = await attach(f, 'attached.txt', 'ATTACHED-BODY'), read = await attach(f, 'read.txt', 'READ-BODY')
     ;(f.host as unknown as { toolsFor: unknown }).toolsFor = async () => readerTool(f, read.reference.id).snapshot()
-    await say(f, p.id, 'go', [attached.reference.id])
+    await say(f, p.id, 'go', [attached.reference.id], true)
     const records = (await entriesOf(f)).filter(entry => entry.type === 'custom' && ['her.run', 'her.sources'].includes(entry.customType))
     const text = JSON.stringify(records)
     expect(text).toContain(attached.reference.id)
@@ -326,6 +340,7 @@ describe('revoked material stays out (7.3)', () => {
     const open = new Promise<void>(resolve => { void hold.beforeReply().then(resolve) })
     ;(f.host as unknown as { toolsFor: unknown }).toolsFor = async () => readerTool(f, file.reference.id, open).snapshot()
     const running = await f.send(f.id, p.id, 'read it through the tool')
+    await approveNextTool(f.chat, f.id)
     await expect.poll(() => s.requests.length).toBe(1)
     await wait(200)
     await f.files!.revoke(file.grant.id)
@@ -342,7 +357,7 @@ describe('revoked material stays out (7.3)', () => {
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl)
     const file = await attach(f, 'secret-report.txt', 'TOOL-READ-BODY')
     ;(f.host as unknown as { toolsFor: unknown }).toolsFor = async () => readerTool(f, file.reference.id).snapshot()
-    await say(f, p.id, 'read it through the tool')
+    await say(f, p.id, 'read it through the tool', undefined, true)
     expect(bodies(s)[1]).toContain('TOOL-READ-BODY')
     await f.files!.revoke(file.grant.id)
     await say(f, p.id, 'a later question')

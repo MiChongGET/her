@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Her · Logo 与 Samantha 头像</title>
+<style>
+:root{color-scheme:light;--paper:#f8f7f3;--card:#fcfdf9;--ink:#353a36;--muted:#777c74;--line:#e5e6dd;--sage:#66765d}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+main{max-width:1060px;margin:auto;padding:48px 40px 56px}header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:30px}
+h1,h2,p{margin:0}h1{font:30px "Songti SC",STSong,serif}h2{font:24px "Songti SC",STSong,serif}.muted{color:var(--muted)}.small{font-size:12px}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:20px}.card{border:1px solid var(--line);border-radius:16px;background:var(--card);padding:28px}
+.stage{height:290px;display:flex;align-items:center;justify-content:center;margin-bottom:20px}.app-icon{width:210px;height:210px;filter:drop-shadow(0 8px 16px #353a3609)}
+.portrait{width:260px;height:260px;border-radius:50%;object-fit:cover}.description{margin-top:9px;max-width:320px;color:var(--muted)}
+.usage{margin-top:20px;display:grid;grid-template-columns:1fr 1fr;gap:20px}.usage h2{font:16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin-bottom:20px}
+.sizes{display:flex;align-items:flex-end;gap:28px;min-height:94px}.size{text-align:center}.size span{display:block;color:var(--muted);font-size:11px;margin-top:8px}
+.tray{display:flex;height:40px;align-items:center;background:#edeee8;border-radius:6px;padding:0 14px}.sidebar-row{display:flex;gap:10px;align-items:center;margin-bottom:20px}
+.avatar{display:block;border-radius:50%;object-fit:cover;flex-shrink:0}.sidebar-name{font-size:15px}.chat{display:flex;gap:10px;align-items:flex-start}.bubble{background:#f4f3ed;border:1px solid #e8e6dd;border-radius:13px 13px 13px 4px;padding:9px 13px}
+.palette{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:28px}.swatch{display:flex;gap:7px;align-items:center;margin-right:10px;font-size:11px;color:var(--muted)}.swatch i{width:18px;height:18px;display:block;border-radius:50%;border:1px solid #353a3612}
+footer{display:flex;gap:18px;flex-wrap:wrap;border-top:1px solid var(--line);margin-top:28px;padding-top:20px}a{color:var(--sage);text-decoration:none}a:hover{text-decoration:underline}a:focus-visible{outline:2px solid var(--sage);outline-offset:4px}
+@media(max-width:700px){main{padding:28px 20px}.pair,.usage{grid-template-columns:1fr}.stage{height:260px}header{gap:16px}h1{font-size:25px}}
+</style>
+</head>
+<body>
+<main>
+<header><h1>Her 与 Samantha</h1><span class="small muted">视觉初稿 · 2026.10.24</span></header>
+<section class="pair" aria-label="Logo 与头像">
+<article class="card">
+<div class="stage"><img class="app-icon" src="her-app-icon.svg" alt="暖白圆角方底，深灰绿色柔和小写 h 标志"></div>
+<h2>Her</h2><p class="description">以小写 h 为骨架的柔和符号。轻微的手写感、圆润笔端与宽松留白。</p>
+</article>
+<article class="card">
+<div class="stage"><img class="portrait" src="samantha-avatar.png" alt="Samantha：深色齐肩发、轻微笑意的东亚成年女性插画头像"></div>
+<h2>Samantha</h2><p class="description">知性、亲近、有自己的个性。自然的目光与轻微笑意，保留少量绘画质感。</p>
+</article>
+</section>
+<section class="usage" aria-label="实际尺寸使用示意">
+<article class="card">
+<h2>Logo 的小尺寸</h2>
+<div class="sizes">
+<div class="size"><div class="tray"><img src="her-logo-monochrome.svg" width="18" height="18" alt="18 像素单色标志"></div><span>菜单栏 · 18px</span></div>
+<div class="size"><img src="her-logo.svg" width="32" height="32" alt="32 像素标志"><span>32px</span></div>
+<div class="size"><img src="her-app-icon.svg" width="64" height="64" alt="64 像素应用图标"><span>64px</span></div>
+</div>
+</article>
+<article class="card">
+<h2>头像的圆形裁切</h2>
+<div class="sidebar-row"><img class="avatar" src="samantha-avatar.png" width="36" height="36" alt="36 像素 Samantha 头像"><span class="sidebar-name">Samantha</span><span class="muted small">侧栏 · 36px</span></div>
+<div class="chat"><img class="avatar" src="samantha-avatar.png" width="32" height="32" alt="32 像素 Samantha 头像"><div class="bubble">我在，慢慢说。<span class="muted small">　32px 使用示意</span></div></div>
+</article>
+</section>
+<div class="palette" aria-label="配色">
+<span class="swatch"><i style="background:#f8f7f3"></i>暖白 #F8F7F3</span>
+<span class="swatch"><i style="background:#f0f1e9"></i>浅灰绿 #F0F1E9</span>
+<span class="swatch"><i style="background:#66765d"></i>深灰绿 #66765D</span>
+<span class="swatch"><i style="background:#353a36"></i>文字 #353A36</span>
+</div>
+<footer class="small">
+<a href="her-logo.svg" download>Logo · SVG</a><a href="her-logo.png" download>Logo · 透明 PNG</a><a href="her-app-icon.png" download>应用图标 · PNG</a><a href="her-logo-monochrome.svg" download>单色 Logo · SVG</a><a href="samantha-avatar.png" download>Samantha · 原图</a><a href="DESIGN.md">设计说明与生成提示词</a>
+</footer>
+</main>
+</body>
+</html>

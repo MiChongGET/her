@@ -10,7 +10,7 @@ async function launch() {
   const executablePath = process.env.HER_TEST_APP_EXECUTABLE
   const app = await _electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: directory } })
   const page = await app.firstWindow()
-  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
   return { app, directory }
 }
 

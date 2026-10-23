@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" role="img" aria-labelledby="her-app-title">
+  <title id="her-app-title">her 应用图标</title>
+  <rect width="1024" height="1024" rx="224" fill="#f8f7f3"/>
+  <g transform="translate(32 192) scale(2.5)">
+    <defs>
+    <mask id="her-app-cutout" maskUnits="userSpaceOnUse" x="0" y="0" width="384" height="256" style="mask-type:luminance">
+      <rect width="384" height="256" fill="white"/>
+      <g transform="translate(52 47)" fill="none" stroke="black" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M20 112C21 86 23 51 26 22M22 82C30 61 43 55 57 57C74 59 79 70 77 89L75 112"/>
+      <path d="M109 83H162C165 67 152 55 137 56C115 57 106 73 108 92C110 113 135 124 157 108"/>
+      <path d="M191 112L193 62M193 80C202 59 215 54 229 61"/>
+    </g>
+      <path d="M318 47H336Q338 47 338 49V90Q338 92 336.5 91L328.2 84.9Q327 84 325.8 84.9L317.5 91Q316 92 316 90V49Q316 47 318 47Z" fill="black"/>
+    </mask>
+  </defs>
+  <path d="M70 24H314C346 24 368 46 368 78V154C368 186 346 208 314 208H111L70 234Q64 238 64 230V207C35 204 16 185 16 154V78C16 46 38 24 70 24Z" fill="#66765d" mask="url(#her-app-cutout)"/>
+  </g>
+</svg>

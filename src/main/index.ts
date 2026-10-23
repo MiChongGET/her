@@ -2,10 +2,10 @@ import { PdfService, registerPdfTools } from '../core/documents/pdf'
 import { ElectronPdfRenderer } from './pdf-renderer'
 import { DocumentService, registerDocumentTools } from '../core/documents/service'
 import { createMarkItDownParser, MARKITDOWN_POLICY } from '../core/documents/markitdown'
-import { app, BrowserWindow, dialog, globalShortcut, Menu, nativeImage, net, protocol, session, Tray, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Menu, Notification, nativeImage, nativeTheme, net, protocol, session, Tray, type MenuItemConstructorOptions } from 'electron'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { dataPaths } from '../core/storage/paths'
 import { HerStore } from '../core/storage/store'
 import { ProfileService } from '../core/storage/profiles'
@@ -14,20 +14,27 @@ import { AgentHost } from '../core/agent/host'
 import { FileAccessService } from '../core/files/access'
 import { registerFileTools } from '../core/files/tools'
 import { createDefaultRegistry } from '../core/tools/registry'
+import { EgoBrowserTools } from '../core/tools/ego-browser'
 import { combineRegistries } from '../core/tools/combine'
 import { secretCodec } from './credentials'
+import { WorkspaceService } from '../core/conversation/workspace'
+import { TopicHandoffService } from '../core/conversation/topic-handoff'
 import { registerIpc } from './ipc'
 import { clipboardWriteAllowed } from './ipc-policy'
 import { McpConfigService } from '../core/mcp/config'
 import { PresetDependencies } from '../core/mcp/dependencies'
-import { createBrowserAdapter } from '../core/mcp/browser'
+import { McpPrerequisiteError } from '../core/mcp/errors'
 import { createWebSearchAdapter } from '../core/mcp/web-search'
+import { HttpComparison } from '../core/delegations/http-comparison'
+import { BrowserActions } from '../core/tools/browser-actions'
 import { createPeekabooAdapter } from '../core/mcp/peekaboo'
 import { McpConnectionManager } from '../core/mcp/manager'
 import { ToolArtifactStore } from '../core/tools/artifacts'
+import { PendingWorkNotifier, DeliveryState } from './pending-work-notifier'
+import { getNotificationPermission } from './notification-permission'
 import { createShutdown } from './shutdown'
 import { updateShortcuts } from './shortcuts'
-import type { DesktopSettings } from '../shared/types'
+import type { Appearance, DesktopSettings } from '../shared/types'
 
 app.setName('Her')
 if (process.env.HER_DATA_DIR) app.setPath('userData', resolve(process.env.HER_DATA_DIR))
@@ -36,11 +43,13 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 const here = dirname(fileURLToPath(import.meta.url))
+const sourceResources = resolve(here, '../../resources')
 const developmentUrl = process.env.ELECTRON_RENDERER_URL
 let window: BrowserWindow
 let tray: Tray
 let store: HerStore | undefined
 let chat: ChatService | undefined
+let notifier: PendingWorkNotifier | undefined
 let quitting = false
 let quitComplete = false
 let shutdown: (() => Promise<void>) | undefined
@@ -70,30 +79,42 @@ function desktopPreferences(input: { shortcut: string; stopShortcut: string; lau
   return updated
 }
 
+function setAppearance(appearance: Appearance): DesktopSettings {
+  const updated = { ...store!.getSettings(), appearance }
+  store!.setSettings(updated)
+  nativeTheme.themeSource = appearance
+  applyEffectiveAppearance()
+  return updated
+}
+
+function applyEffectiveAppearance(): void {
+  if (!window || window.isDestroyed()) return
+  const effective = nativeTheme.shouldUseDarkColors ? 'dark' : 'light'
+  window.setBackgroundColor(effective === 'dark' ? '#1c1d1b' : '#f8f7f3')
+  window.webContents.send('her:appearance-effective', effective)
+}
+
 function trayIcon(): Electron.NativeImage {
-  const size = 18
-  const bitmap = Buffer.alloc(size * size * 4)
-  for (let y = 3; y < 15; y++) {
-    for (let x = 3; x < 15; x++) {
-      if (x < 6 || x > 11 || (y >= 8 && y <= 10)) bitmap[(y * size + x) * 4 + 3] = 255
-    }
-  }
-  const image = nativeImage.createFromBitmap(bitmap, { width: size, height: size })
+  const directory = app.isPackaged ? join(process.resourcesPath, 'native-icons')
+    : join(sourceResources, 'branding/her-final/native-icons')
+  const image = nativeImage.createFromPath(join(directory, 'her-tray.png'))
   image.setTemplateImage(true)
   return image
 }
 
 async function start(): Promise<void> {
+  if (process.platform === 'darwin' && !app.isPackaged) {
+    app.dock?.setIcon(join(sourceResources, 'branding/her-final/her-app-icon.png'))
+  }
   // Everything lives under Her-Pi-v1/, so files left by the old Her in the user-data folder are never read or touched.
   const paths = dataPaths(app.getPath('userData'))
   const dataDirectory = paths.root
   mkdirSync(dataDirectory, { recursive: true, mode: 0o700 })
+  const newInstallation = !existsSync(paths.database)
   store = new HerStore(paths.database)
-  if (!store.listConversations().length) {
-    // Create a default conversation on first launch
-    const { randomUUID } = await import('node:crypto')
-    store.createConversation(randomUUID(), randomUUID(), '新对话')
-  }
+  if (newInstallation) store.setSettings({ ...store.getSettings(), appearance: 'system' })
+  nativeTheme.themeSource = store.getSettings().appearance
+  store.ensureDailyConversation()
   const profiles = new ProfileService(store, secretCodec, lifetime.signal)
   const rendererDirectory = resolve(here, '../renderer')
   protocol.handle('her', request => {
@@ -110,13 +131,15 @@ async function start(): Promise<void> {
     clipboardWriteAllowed(permission, details.requestingUrl ?? '', details.isMainFrame, contents === window?.webContents, developmentUrl))
   window = new BrowserWindow({
     width: 1140, height: 800, minWidth: 850, minHeight: 620,
-    title: 'Her', backgroundColor: '#f5f3ee',
+    title: 'Her', backgroundColor: nativeTheme.shouldUseDarkColors ? '#1c1d1b' : '#f8f7f3',
     titleBarStyle: 'hiddenInset',
     webPreferences: {
       preload: join(here, '../preload/index.cjs'),
+      additionalArguments: [`--her-effective-appearance=${nativeTheme.shouldUseDarkColors ? 'dark' : 'light'}`],
       contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true
     }
   })
+  nativeTheme.on('updated', applyEffectiveAppearance)
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   window.webContents.on('will-navigate', event => event.preventDefault())
   window.on('close', event => {
@@ -128,16 +151,31 @@ async function start(): Promise<void> {
   const files = new FileAccessService(currentStore, lifetime.signal)
   registerFileTools(registry, files)
   const artifacts = new ToolArtifactStore(currentStore, lifetime.signal, files)
+  const browser = new EgoBrowserTools({ lifetime: lifetime.signal, artifacts, isEnabled: () => !currentStore.getSettings().disabledSkillIds?.includes('ego-browser') })
+  browser.register(registry)
+  new BrowserActions(browser).register(registry)
   const dependencies = new PresetDependencies({ lifetime: lifetime.signal,
-    resourcesRoot: app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources') })
+    resourcesRoot: app.isPackaged ? process.resourcesPath : sourceResources })
+  const confinedHttp = new Map<string, number>()
+  const currentHttpRevision = (id: string): string | null => {
+    const config = configs.list().find(value => value.id === id)
+    return config?.enabled && config.presetId === 'open-websearch' && confinedHttp.get(id) === config.revision ? String(config.revision) : null
+  }
+  const httpComparison = new HttpComparison(currentStore, {
+    available: () => configs.list().some(config => currentHttpRevision(config.id) !== null), serviceRevision: currentHttpRevision
+  })
   const manager: McpConnectionManager = new McpConnectionManager(configs, registry, artifacts, async config => {
     if (config.presetId === 'peekaboo') {
       await dependencies.verifyPeekaboo(config)
       return createPeekabooAdapter(manager, config.id)
     }
-    if (config.presetId === 'playwright' || config.presetId === 'open-websearch') {
+    if (config.presetId === 'playwright') throw new McpPrerequisiteError('Playwright 预设已移除，请在技能设置中启用官方 ego-browser 技能。')
+    if (config.presetId === 'open-websearch') {
       await dependencies.verifyWebPreset(config, config.presetId)
-      return config.presetId === 'playwright' ? createBrowserAdapter(manager, config.id) : createWebSearchAdapter(manager, config.id)
+      const requestConfinement = await dependencies.webRequestConfinement()
+      if (requestConfinement) confinedHttp.set(config.id, config.revision)
+      else confinedHttp.delete(config.id)
+      return createWebSearchAdapter(manager, config.id, { comparison: httpComparison, requestConfinement })
     }
     if (config.presetId === 'markitdown') { await dependencies.verifyMarkItDown(config); return MARKITDOWN_POLICY }
     if (config.presetId) throw new Error('此预设执行适配尚未接入，请检查依赖。')
@@ -151,17 +189,46 @@ async function start(): Promise<void> {
   if (currentStore.documentCleanupWarning) console.warn(currentStore.documentCleanupWarning)
 
   const host = new AgentHost(currentStore, profiles, dataDirectory, async (conversationId, signal) =>
-    combineRegistries(await manager.prepare(conversationId, signal)), (id, context) => artifacts.read(id, context), files, manager)
+    combineRegistries(await manager.prepare(conversationId, signal)), (id, context) => artifacts.read(id, context), files, manager, httpComparison)
+  let workspace: WorkspaceService
+  const publishPending = () => {
+    if (quitting || window.isDestroyed()) return
+    const notices = workspace.getPendingActions()
+    window.webContents.send('her:workspace-pending-event', notices)
+    void notifier?.update(notices, window.isVisible() && !window.isMinimized())
+  }
   chat = new ChatService(currentStore, host,
-    event => { if (!window.isDestroyed()) window.webContents.send('her:chat-event', event) },
-    event => { if (!window.isDestroyed()) window.webContents.send('her:request-event', event) })
+    event => {
+      if (window.isDestroyed()) return
+      // Task and message have independent consumers; never deliver the nested task twice.
+      if (event.task) {
+        const task = workspace.routeTask(event.task)
+        if (task) window.webContents.send('her:workspace-task-event', task)
+      }
+      const routed = workspace.routeChat(event)
+      if (routed) {
+        const { task: _task, ...messageEvent } = routed.event
+        window.webContents.send('her:workspace-chat-event', { ...routed, event: messageEvent })
+      }
+      publishPending()
+    },
+    event => {
+      if (window.isDestroyed()) return
+      const routed = workspace.routeRequest(event)
+      if (routed) window.webContents.send('her:workspace-request-event', routed)
+      publishPending()
+    })
+  workspace = new WorkspaceService(currentStore, chat)
+  const topicHandoffs = new TopicHandoffService(currentStore, chat, workspace)
+  await topicHandoffs.recover()
 
   shutdown = createShutdown({ lifetime, stop: () => chat!.shutdown(),
-    drain: () => Promise.allSettled([chat!.shutdown(), manager.shutdown(), dependencies.shutdown(), documents.shutdown(), pdf.shutdown(), artifacts.shutdown(), ...pending]),
-    forceClose: () => { manager.forceCloseOwnedProcesses(); dependencies.forceCloseOwnedProcesses() }, close: () => currentStore.close() })
+    drain: () => Promise.allSettled([chat!.shutdown(), manager.shutdown(), dependencies.shutdown(), browser.shutdown(), documents.shutdown(), pdf.shutdown(), artifacts.shutdown(), ...pending]),
+    forceClose: () => { manager.forceCloseOwnedProcesses(); dependencies.forceCloseOwnedProcesses(); browser.forceCloseOwnedProcesses() }, close: () => currentStore.close() })
   registerIpc({
-    window, developmentUrl, store: currentStore, profiles, chat, configs, manager, dependencies, artifacts, files, lifetime: lifetime.signal, pending,
-    appVersion: app.getVersion(), dataDirectory, desktopPreferences
+    window, developmentUrl, store: currentStore, profiles, chat, workspace, topicHandoffs, configs, manager, dependencies, artifacts, files, lifetime: lifetime.signal, pending,
+    appVersion: app.getVersion(), dataDirectory, desktopPreferences, setAppearance, onPendingActionsChanged: publishPending,
+    onSkillDisabled: id => { if (id === 'ego-browser') browser.disable() }
   })
   const menuTemplate: MenuItemConstructorOptions[] = [
     { label: 'Her', submenu: [
@@ -190,6 +257,38 @@ async function start(): Promise<void> {
     { label: '显示 Her', click: showWindow }, { type: 'separator' }, { label: '退出 Her', role: 'quit' }
   ]))
   tray.on('click', showWindow)
+  notifier = new PendingWorkNotifier({
+    permission: getNotificationPermission,
+    fingerprint: notice => workspace.notificationFingerprint(notice),
+    runFingerprint: notice => workspace.notificationRunFingerprint(notice),
+    delivery: new DeliveryState(paths.notificationDelivery),
+    updateTray: count => {
+      const label = count ? 'Her · 有待处理事项' : 'Her'
+      tray.setToolTip(label)
+      tray.setTitle(count ? '•' : '')
+      tray.setContextMenu(Menu.buildFromTemplate([
+        { label: count ? '有待处理事项' : '暂无待处理事项', enabled: false },
+        { label: '显示 Her', click: showWindow }, { type: 'separator' }, { label: '退出 Her', role: 'quit' }
+      ]))
+    },
+    showNotification: click => {
+      const notification = new Notification({ title: 'Her', body: '有事项需要你处理。', silent: true })
+      notification.on('click', click)
+      notification.show()
+      return () => { notification.removeAllListeners(); notification.close() }
+    },
+    resolve: input => workspace.resolvePendingAction(input),
+    open: notice => {
+      workspace.queuePendingActionOpen(notice)
+      showWindow()
+      window.webContents.send('her:workspace-pending-open-event')
+    }
+  })
+  window.on('show', publishPending)
+  window.on('hide', publishPending)
+  window.on('minimize', publishPending)
+  window.on('restore', publishPending)
+  publishPending()
   const settings = store.getSettings()
   if (settings?.shortcut && !registerShortcut(settings.shortcut)) {
     void dialog.showMessageBox(window, {
@@ -215,6 +314,7 @@ else {
     if (quitComplete || !shutdown) return
     event.preventDefault()
     quitting = true
+    notifier?.dispose()
     void shutdown().then(() => { quitComplete = true; app.quit() })
   })
   app.on('will-quit', () => {

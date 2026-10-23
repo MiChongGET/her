@@ -11,7 +11,7 @@ test('missing tools expose real Host setup, safe install actions and an honest r
   try {
     app = await _electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [resolve('.')] }), env: { ...env, HOME: directory, HER_DATA_DIR: join(directory, 'data') } })
     const page = await app.firstWindow()
-    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
     const host = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, resources: app.isPackaged ? process.resourcesPath : app.getAppPath() + '/resources' }))
     // Real dependency inspection + IPC. An empty HOME supplies no installed parser.
     const initial = await page.evaluate(() => window.her.checkPresetDependencies('markitdown', ''))
@@ -31,7 +31,7 @@ test('missing tools expose real Host setup, safe install actions and an honest r
     await page.evaluate(() => {
       Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { (window as unknown as { copiedInstallCommand: string }).copiedInstallCommand = text } } })
     })
-    await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('tab', { name: 'MCP 工具', exact: true }).click()
     await page.getByLabel('MCP 名称', { exact: true }).fill('安装时保留的草稿')
     await page.locator('.mcp-presets').getByRole('combobox').selectOption('markitdown')

@@ -16,7 +16,7 @@ async function setup(text = '# Heading\nhello', extension = '.docx') {
   const root = await mkdtemp(join(tmpdir(), 'her-docs-')); cleanups.push(() => rmSync(root, { recursive: true, force: true }))
   const store = new HerStore(join(root, 'db.sqlite')); cleanups.push(() => store.close())
   const lifetime = new AbortController(); const access = new FileAccessService(store, lifetime.signal)
-  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'r', callId: 'c', signal: new AbortController().signal }
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'r', callId: 'c', authorize: async () => {}, signal: new AbortController().signal }
   const path = join(root, 'source' + extension); await writeFile(path, 'authorized bytes')
   const [grant] = await access.grant([path], { scope: 'conversation', kind: 'file', conversationId: context.conversationId })
   const file = await access.reference(grant.id, '', context)

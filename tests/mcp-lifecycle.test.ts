@@ -16,7 +16,7 @@ it('fences late config and profile crypto beyond the single five-second shutdown
   const codec = { encrypt: () => gate.promise, decrypt: async (bytes: Buffer) => bytes.toString() }
   const profiles = new ProfileService(store, codec, lifetime.signal)
   const configs = new McpConfigService(store, codec, lifetime.signal)
-  const saves = [profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm', authMethod: 'api-key', apiKey: 'secret' }), configs.save({ name: 'm', enabled: true, transport: 'stdio', command: 'node', args: [], secretValues: { TOKEN: 'secret' } })]
+  const saves = [profiles.save({ name: 'p', protocol: 'openai', baseUrl: 'http://localhost:1234', model: 'm', contextWindow: 128000, authMethod: 'api-key', apiKey: 'secret' }), configs.save({ name: 'm', enabled: true, transport: 'stdio', command: 'node', args: [], secretValues: { TOKEN: 'secret' } })]
   const results = Promise.allSettled(saves)
   const access = vi.spyOn(store, 'getProfile'); const write = vi.spyOn(store, 'saveMcpService')
   const forced = vi.fn(); const close = vi.fn(() => store.close()); const stop = vi.fn()

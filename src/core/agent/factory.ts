@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
@@ -34,7 +34,7 @@ export function classifySessionError(error: unknown): Error {
 
 /** SessionManager is the only reader/writer of authoritative conversation history. */
 export async function openConversationHistory(dataDirectory: string, conversation: StoredConversation) {
-  const { SessionManager } = await import('@earendil-works/pi-coding-agent')
+  const { SessionManager, parseSessionEntries } = await import('@earendil-works/pi-coding-agent')
   const agentDir = join(dataDirectory, 'pi')
   const cwd = join(agentDir, 'workspaces', conversation.id)
   const sessionDir = join(agentDir, 'sessions', conversation.id)
@@ -42,6 +42,20 @@ export async function openConversationHistory(dataDirectory: string, conversatio
   mkdirSync(sessionDir, { recursive: true, mode: 0o700 })
   try {
     const file = readdirSync(sessionDir).find(name => name.endsWith(`_${conversation.piSessionId}.jsonl`))
+    const quarantine = join(agentDir, 'quarantine', conversation.id)
+    if (!file && existsSync(quarantine)) throw new SessionDamagedError()
+    if (file) {
+      // Integrity only: Pi still owns history interpretation and all writes to the session file.
+      const content = readFileSync(join(sessionDir, file), 'utf8')
+      const lines = content.split('\n').filter(line => line.trim())
+      const parsed = parseSessionEntries(content)
+      if (!lines.length || parsed.length !== lines.length || parsed.some(entry => !entry || typeof entry !== 'object') || parsed[0]?.type !== 'session') {
+        mkdirSync(join(agentDir, 'quarantine'), { recursive: true, mode: 0o700 })
+        writeFileSync(quarantine, 'session-damaged', { mode: 0o600 })
+        throw new SessionDamagedError()
+      }
+      rmSync(quarantine, { force: true })
+    }
     return { agentDir, cwd, manager: file ? SessionManager.open(join(sessionDir, file), sessionDir, cwd)
       : SessionManager.create(cwd, sessionDir, { id: conversation.piSessionId }) }
   } catch (error) { throw classifySessionError(error) }
@@ -64,27 +78,28 @@ export async function createHerAgentSession(
       : await import('@earendil-works/pi-ai/api/openai-responses')
   const history = previousHistory ?? await openConversationHistory(dataDirectory, conversation)
   const marker = randomUUID()
+  const providerId = `her-${provider.id}`
   const credentials: CredentialStore = {
-    read: async id => id === provider.id ? { type: 'api_key', key: provider.apiKey || marker } : undefined,
-    list: async () => [{ providerId: provider.id, type: 'api_key' }],
+    read: async id => id === providerId ? { type: 'api_key', key: provider.apiKey || marker } : undefined,
+    list: async () => [{ providerId, type: 'api_key' }],
     modify: async () => { throw new Error('凭据由 Her 管理。') }, delete: async () => { throw new Error('凭据由 Her 管理。') }
   }
   const runtime = await ModelRuntime.create({ credentials, modelsPath: null, refreshOnCreate: false, allowModelNetwork: false })
   const budget = compactionBudget(provider.contextWindow, provider.maxOutputTokens)
   const compactBudget = compactForWindow === undefined ? budget : compactionBudget(compactForWindow, provider.maxOutputTokens)
   const model: Model<'openai-completions' | 'anthropic-messages' | 'openai-responses'> = {
-    id: provider.model, name: provider.model, provider: provider.id,
+    id: provider.model, name: provider.model, provider: providerId,
     api: provider.protocol === 'openai' ? 'openai-completions' : provider.protocol === 'anthropic' ? 'anthropic-messages' : 'openai-responses',
     baseUrl: provider.protocol === 'anthropic' ? provider.baseUrl.replace(/\/v1\/?$/, '') : provider.baseUrl,
     reasoning: false, input: provider.multimodal ? ['text', 'image'] : ['text'], contextWindow: budget.contextWindow, maxTokens: budget.maxOutputTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
   }
-  let finished = false, terminated = false
-  const transport = { get normalEnd() { return finished && terminated }, failure: '模型请求失败，请检查模型设置后重试。' }
-  runtime.registerProvider(provider.id, {
+  let finished = false, terminated = false, inputReported = false, outputReported = false
+  const transport = { get usageKnown() { return inputReported && outputReported }, get normalEnd() { return finished && terminated }, failure: '模型请求失败，请检查模型设置后重试。' }
+  runtime.registerProvider(providerId, {
     baseUrl: model.baseUrl, api: model.api, models: [model],
     streamSimple: (selected, context, options) => {
-      finished = false; terminated = false
+      finished = false; terminated = false; inputReported = false; outputReported = false
       return adapter.streamSimple(selected, normalizeContext(context), {
       ...options, apiKey: provider.apiKey || marker, headers: provider.customHeaders,
       signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
@@ -127,6 +142,13 @@ export async function createHerAgentSession(
       },
       onProviderStreamEvent(data) {
         if (!data || typeof data !== 'object') return
+        const counts = data as { usage?: Record<string, unknown>; response?: { usage?: Record<string, unknown> }; choices?: { usage?: Record<string, unknown> }[] }
+        if (provider.protocol === 'anthropic' && (data as { message?: { usage?: { input_tokens?: number } } }).message?.usage?.input_tokens !== undefined) inputReported = true
+        const usage = counts.usage ?? counts.response?.usage ?? counts.choices?.[0]?.usage
+        if (usage) {
+          inputReported ||= typeof (usage.prompt_tokens ?? usage.input_tokens) === 'number'
+          outputReported ||= typeof (usage.completion_tokens ?? usage.output_tokens) === 'number'
+        }
         const event = data as { type?: string; choices?: { finish_reason?: string }[]; delta?: { stop_reason?: string }; response?: { status?: string } }
         if (provider.protocol === 'openai' && event.choices?.some(choice => choice.finish_reason === 'stop')) finished = true
         if (provider.protocol === 'anthropic') {
@@ -148,7 +170,7 @@ export async function createHerAgentSession(
   }
   signal.throwIfAborted()
   const { session } = await createAgentSession({
-    cwd: history.cwd, agentDir: history.agentDir, modelRuntime: runtime, model: runtime.getModel(provider.id, provider.model)!,
+    cwd: history.cwd, agentDir: history.agentDir, modelRuntime: runtime, model: runtime.getModel(providerId, provider.model)!,
     thinkingLevel: 'off', noTools: 'builtin', tools: tools.map(tool => tool.name), customTools: tools, resourceLoader: resources,
     sessionManager: history.manager, settingsManager: settings = SettingsManager.inMemory({ retry: { enabled: true, maxRetries: MODEL_RETRIES, baseDelayMs: retryPolicy.baseDelayMs },
       compaction: { enabled: true, reserveTokens: compactBudget.reserveTokens, keepRecentTokens: compactBudget.keepRecentTokens } })

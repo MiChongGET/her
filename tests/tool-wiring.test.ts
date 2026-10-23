@@ -1,3 +1,4 @@
+import { approveNextTool } from './helpers/host-harness'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -33,7 +34,7 @@ describe('combineRegistries', () => {
     const combined = combineRegistries([registryWith('a', () => calls.push('a')), registryWith('b', () => calls.push('b'))])
     expect(combined.getDefinitions().map(tool => tool.name)).toEqual(['a', 'b'])
     expect(Object.keys(combined.getRevisions()).sort()).toEqual(['a', 'b'])
-    const context = { runId: 'r', conversationId: 'c', callId: 'k', signal: new AbortController().signal }
+    const context = { runId: 'r', conversationId: 'c', callId: 'k', signal: new AbortController().signal, authorize: async () => {} }
     await combined.execute('b', { ok: true }, context)
     expect(calls).toEqual(['b'])
     expect(await combined.execute('missing', {}, context)).toMatchObject({ isError: true })
@@ -109,9 +110,10 @@ describe('AgentHost with injected tools', () => {
     const server = await startFixtureServer('openai', ['tool', 'text']); cleanup.push(server.close)
     const calls: string[] = [], asked: string[] = []
     const f = fixture(async conversationId => { asked.push(conversationId); return registryWith(TOOL_NAME, () => calls.push('ran')).snapshot() })
-    const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const requestId = randomUUID()
     await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'go' })
+    await approveNextTool(f.chat, f.id)
     await expect.poll(() => f.requests.find(event => event.requestId === requestId && ['completed', 'failed'].includes(event.state)), { timeout: 10_000 }).toBeDefined()
     expect(asked).toEqual([f.id])
     expect(calls).toEqual(['ran'])
@@ -123,7 +125,7 @@ describe('AgentHost with injected tools', () => {
   it('fails the run, without calling the model, when the tool provider throws', async () => {
     const server = await startFixtureServer('openai', 'text'); cleanup.push(server.close)
     const f = fixture(async () => { throw new Error('tools unavailable') })
-    const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const requestId = randomUUID()
     await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'go' })
     await expect.poll(() => f.requests.find(event => event.requestId === requestId && event.state === 'failed'), { timeout: 10_000 }).toBeDefined()
@@ -146,10 +148,11 @@ describe('AgentHost with injected tools', () => {
       const f = fixture(async () => registry.snapshot(), (id, context) => readable ? artifactsRef.read!(id, context) : Promise.reject(new Error('gone')))
       artifactsRef.store = new ToolArtifactStore(f.store)
       artifactsRef.read = (id, context: ToolExecutionContext) => artifactsRef.store!.read(id, context)
-      const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none',
+      const profile = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none',
         models: [{ id: 'test-model', longOutput: false, multimodal }] })
       const requestId = randomUUID()
       await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'look' })
+      await approveNextTool(f.chat, f.id)
       await expect.poll(() => f.requests.find(event => event.requestId === requestId && ['completed', 'failed'].includes(event.state)), { timeout: 10_000 }).toBeDefined()
       return { f, requests: server.requests, state: f.requests.at(-1)?.state, base64: Buffer.from(png).toString('base64') }
     }

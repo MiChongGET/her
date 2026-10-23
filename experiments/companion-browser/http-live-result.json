@@ -1,0 +1,64 @@
+{
+  "time": "2026-10-23T04:16:28.312Z",
+  "upstreamVersion": "2.2.0",
+  "patchedRevision": "her-request-confinement-v1",
+  "treeHash": "b8d9e106bc30e4877acbdea464cc333f3fac49e6794e4c0b2cff190493796598",
+  "prompts": 0,
+  "receipts": [
+    {
+      "name": "新加坡莱佛士酒店",
+      "url": "https://www.raffles.com/singapore/",
+      "finalUrl": "https://www.raffles.com/singapore/",
+      "title": "Raffles Hotel Singapore: Book Luxury Hotel Experience | Raffles Hotels & Resorts",
+      "method": "request",
+      "characters": 2033
+    },
+    {
+      "name": "伦敦莱佛士酒店",
+      "url": "https://www.raffles.com/london/",
+      "finalUrl": "https://www.raffles.com/london/",
+      "title": "Raffles London at The OWO : Book Luxury Hotel Experience | Raffles Hotels & Resorts",
+      "method": "request",
+      "characters": 2033
+    },
+    {
+      "name": "巴黎莱佛士酒店",
+      "url": "https://www.raffles.com/paris/",
+      "finalUrl": "https://www.raffles.com/paris/",
+      "title": "Le Royal Monceau Raffles Paris : Book Luxury Hotel Experience | Raffles Hotels & Resorts",
+      "method": "request",
+      "characters": 2033
+    }
+  ],
+  "evidence": [
+    {
+      "id": "fdb0706d-c92f-4a08-82aa-de87d5011e95",
+      "kind": "receipt",
+      "refs": [],
+      "contentHash": "022f4f47cc330aa64f411387b4e87071e34d0821113ec17d7fbe318c934b13fe"
+    },
+    {
+      "id": "845c0a4a-0bb6-4e36-9d79-82bdfd3af09d",
+      "kind": "receipt",
+      "refs": [],
+      "contentHash": "88f9ef04ccae3ee70c75d4aa642e626fbcafa6564ce920bd115ace9d7c2f6934"
+    },
+    {
+      "id": "f35c1529-9211-4a35-934f-018db453a378",
+      "kind": "receipt",
+      "refs": [],
+      "contentHash": "0add2eb24136342b1bd4586f08243d78cb5bab43aade06660ca65fb7bb98911c"
+    },
+    {
+      "id": "06673687-fb71-40ef-8267-6ff87453f3e8",
+      "kind": "table",
+      "refs": [
+        "fdb0706d-c92f-4a08-82aa-de87d5011e95",
+        "845c0a4a-0bb6-4e36-9d79-82bdfd3af09d",
+        "f35c1529-9211-4a35-934f-018db453a378"
+      ],
+      "contentHash": "fe6c69bc2573d10ba642c084a6cc1d6d107f4f7af584e27358fece2e65131d37"
+    }
+  ],
+  "browserFallback": "request-only source branches; actual retrievalMethod=request; no browser APIs invoked by this probe"
+}

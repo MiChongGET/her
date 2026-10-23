@@ -15,17 +15,17 @@ for (const { kind, good, bad, label, button, success } of [
       const directory = mkdtempSync(join(tmpdir(), 'her-model-connection-'))
       const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] =>
         entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
-      const app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+      const app = await _electron.launch({ ...(process.env.HER_TEST_APP_EXECUTABLE ? { executablePath: process.env.HER_TEST_APP_EXECUTABLE, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: directory } })
       try {
         const page = await app.firstWindow()
-        await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+        await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
         await page.evaluate(async baseUrl => {
           await window.her.saveProfile({
             name: 'SSE fixture', protocol: 'openai-responses', baseUrl: baseUrl + '/prefix/v1',
-            model: 'test-model', authMethod: 'api-key', apiKey: 'synthetic-credential-fixture'
+            model: 'test-model', contextWindow: 128000, authMethod: 'api-key', apiKey: 'synthetic-credential-fixture'
           })
         }, server.baseUrl)
-        await page.getByRole('button', { name: '设置', exact: true }).click()
+        await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
         await page.getByRole('button', { name: button, exact: true }).click()
         const row = page.locator('.test-row').filter({ hasText: label })
         await expect(row.locator('.test-badge')).toHaveText(scenario === good ? '已验证' : '失败')
@@ -35,7 +35,7 @@ for (const { kind, good, bad, label, button, success } of [
         expect(server.requests[0].url).toBe('/prefix/v1/responses')
         expect(server.requests[0].body).toMatchObject({ stream: true, model: 'test-model' })
         await page.reload()
-        await page.getByRole('button', { name: '设置', exact: true }).click()
+        await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
         await expect(page.locator('.test-row').filter({ hasText: label }).locator('.test-badge'))
           .toHaveText(scenario === good ? '已验证' : '失败')
       } finally {

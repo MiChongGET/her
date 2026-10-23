@@ -4,6 +4,14 @@ import type { ToolExecutionContext } from './types'
 
 export class ApprovalError extends Error {}
 
+/** actionId is main-only metadata; Pi receives only the continuation instruction in message. */
+export class DeniedStepError extends ApprovalError {
+  constructor(readonly actionId: string) {
+    super('你已拒绝此步。继续不依赖这一步的其余获准工作；若无法继续，请说明原因并等待用户调整安排。')
+    this.name = 'DeniedStepError'
+  }
+}
+
 export class ToolApprovalService {
   private readonly pending = new Map<string, { request: ApprovalRequest; settle: (decision: ApprovalDecisionInput['decision']) => void }>()
   private readonly conversationGrants = new Map<string, Map<string, () => boolean>>()
@@ -12,31 +20,32 @@ export class ToolApprovalService {
 
   async authorize(callId: string, assessment: ActionAssessment, context: ToolExecutionContext): Promise<void> {
     context.signal.throwIfAborted()
-    if (assessment.effect === 'read') return
     const binding = context.approvalBinding
     if (!binding || !binding.validate()) throw new ApprovalError('动作确认已失效，请重新观察后继续。')
-    if (binding.allowAllOperations) return
-    const scope = binding.conversationScope
-    if (scope && this.hasConversationApproval(context.conversationId) && this.conversationGrants.get(context.conversationId)?.has(scope.id)) return
+    const action = context.action
+    const decision = action ? context.actionPolicy?.decide(action, context.intent, () => context.admitLocalCandidate?.(assessment, context) === true) ?? 'confirm' : 'confirm'
+    if (decision === 'deny') throw new ApprovalError('动作授权已失效或已被拒绝。')
+    if (decision === 'allow' || binding.localAdmission?.()) return
     const request: ApprovalRequest = { id: randomUUID(), runId: context.runId, callId,
-      revision: binding.revision, target: assessment.displayTarget ?? assessment.target, summary: assessment.summary,
-      ...(scope ? { allowConversation: true } : {}) }
+      revision: binding.revision, target: action?.target ?? assessment.displayTarget ?? assessment.target,
+      summary: action?.summary ?? assessment.summary, purpose: action?.purpose ?? '执行本次请求',
+      preview: structuredClone(action?.preview ?? { fields: [] }), dataClasses: [...(action?.dataClasses ?? [])],
+      providerName: action?.providerName, scopeSummary: action?.scopeSummary ?? '仅本次动作', actionLabel: action?.actionLabel ?? '执行一次' }
     await new Promise<void>((resolve, reject) => {
       const cleanup = () => { this.pending.delete(request.id); context.signal.removeEventListener('abort', abort) }
       const abort = () => { cleanup(); reject(context.signal.reason) }
       this.pending.set(request.id, { request, settle: decision => {
-        cleanup()
         if (context.signal.aborted) reject(context.signal.reason)
         else if (!binding.validate()) reject(new ApprovalError('动作确认已失效，请重新观察后继续。'))
-        else if (decision === 'reject') reject(new ApprovalError('你已拒绝这个动作。'))
+        else if (decision === 'reject') {
+          try { if (action) context.actionPolicy?.reject(action) }
+          catch (error) { cleanup(); reject(error); return }
+          reject(new DeniedStepError(action?.id ?? callId))
+        }
         else {
-          if (decision === 'approve-conversation' && scope && scope.validate()) {
-            const grants = this.conversationGrants.get(context.conversationId) ?? new Map<string, () => boolean>()
-            grants.set(scope.id, scope.validate)
-            this.conversationGrants.set(context.conversationId, grants)
-          }
           resolve()
         }
+        cleanup()
       } })
       context.signal.addEventListener('abort', abort, { once: true })
       context.onApproval?.(request)
@@ -47,10 +56,9 @@ export class ToolApprovalService {
   }
 
   decide(input: ApprovalDecisionInput): void {
-    if (!input || !['approve', 'reject', 'approve-conversation'].includes(input.decision)) return
+    if (!input || !['approve', 'reject'].includes(input.decision)) return
     const pending = this.pending.get(input.approvalId)
     if (!pending || pending.request.revision !== input.revision) return
-    if (input.decision === 'approve-conversation' && !pending.request.allowConversation) return
     pending.settle(input.decision)
   }
 

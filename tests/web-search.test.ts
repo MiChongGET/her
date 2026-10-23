@@ -42,3 +42,32 @@ it('requires a bounded explicit fetch budget before dispatch so wire JSON surviv
     expect(sent).toBe(false)
   }
 })
+
+it('withholds mismatched response provenance instead of attributing another page to the requested URL', async () => {
+  const value = await policy.execute!('fetchWebContent', { url: 'https://example.com/', renderMode: 'request', maxChars: 1000 }, context,
+    async () => ({ content: [{ type: 'text', text: JSON.stringify({ url: 'https://other.test/', finalUrl: 'https://other.test/', title: 'Other', content: 'OUTSIDE_SECRET', retrievalMethod: 'request' }) }] }))
+  expect(value.isError).toBe(true)
+  expect(JSON.stringify(value)).not.toContain('OUTSIDE_SECRET')
+})
+
+it('rechecks a delegated final URL and withholds out-of-scope redirect content', async () => {
+  const action = { id: 'action', delegationId: 'delegation', scopeRevision: 1, adapterId: 'http', adapterRevision: '1', effect: 'read' as const,
+    targetId: 'https://example.com/', payloadHash: 'hash', dataClasses: [], capability: 'http.read', confirmation: 'scope' as const, opaque: false, origin: 'https://example.com' }
+  const scoped: ToolExecutionContext = { ...context, delegationId: 'delegation', action,
+    actionPolicy: { assertCurrent: () => {}, reject: () => {}, decide: candidate => candidate.origin === 'https://example.com' ? 'allow' : 'confirm' } }
+  const value = await policy.execute!('fetchWebContent', { url: 'https://example.com/', renderMode: 'request', maxChars: 1000 }, scoped,
+    async () => ({ content: [{ type: 'text', text: JSON.stringify({ url: 'https://example.com/', finalUrl: 'https://outside.test/', title: 'Other', content: 'OUTSIDE_SECRET', retrievalMethod: 'request' }) }] }))
+  expect(value.isError).toBe(true)
+  expect(JSON.stringify(value)).not.toContain('OUTSIDE_SECRET')
+})
+
+it('preserves an exactly approved original-page result even when the runtime requires per-call confirmation', async () => {
+  const action = { id: 'action', delegationId: 'delegation', scopeRevision: 1, adapterId: 'http', adapterRevision: '1', effect: 'read' as const,
+    targetId: 'https://example.com/', payloadHash: 'hash', dataClasses: [], capability: 'http.read', confirmation: 'always' as const, opaque: false, origin: 'https://example.com' }
+  const scoped: ToolExecutionContext = { ...context, delegationId: 'delegation', action,
+    actionPolicy: { assertCurrent: () => {}, reject: () => {}, decide: () => 'confirm' } }
+  const result = await policy.execute!('fetchWebContent', { url: 'https://example.com/', renderMode: 'request', maxChars: 1000 }, scoped,
+    async () => ({ content: [{ type: 'text', text: JSON.stringify({ url: 'https://example.com/', finalUrl: 'https://example.com/', title: 'Approved', content: 'Exact approved page', retrievalMethod: 'request' }) }] }))
+  expect(result.isError).not.toBe(true)
+  expect(JSON.stringify(result)).toContain('Exact approved page')
+})

@@ -11,10 +11,11 @@ export interface DataPaths {
   pi: string
   artifacts: string
   documents: string
+  notificationDelivery: string
 }
 
 /** The one place that decides where data lives; nothing else joins these names. */
 export function dataPaths(userData: string): DataPaths {
   const root = join(resolve(userData), DATA_ROOT_NAME)
-  return { root, database: join(root, 'her.sqlite'), pi: join(root, 'pi'), artifacts: join(root, 'artifacts'), documents: join(root, 'documents') }
+  return { root, notificationDelivery: join(root, 'notification-delivery.json'), database: join(root, 'her.sqlite'), pi: join(root, 'pi'), artifacts: join(root, 'artifacts'), documents: join(root, 'documents') }
 }

@@ -8,11 +8,11 @@ test('real Electron retains disk File provenance through the isolated preload br
   const documentPath = join(directory, 'fixture.txt')
   writeFileSync(documentPath, 'local constant fixture')
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
-  const app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: join(directory, 'data') } })
+  const app = await _electron.launch({ ...(process.env.HER_TEST_APP_EXECUTABLE ? { executablePath: process.env.HER_TEST_APP_EXECUTABLE, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: join(directory, 'data') } })
   try {
     const page = await app.firstWindow()
-    await expect(page.getByRole('button', { name: '添加资料', exact: true })).toBeVisible()
-    const conversationId = await page.evaluate(async () => (await window.her.createConversation()).id)
+    await expect(page.getByText('文字与附件', { exact: true })).toBeVisible()
+    const conversationId = await page.evaluate(async () => (await window.her.createConversation()).conversation!.id)
     await page.evaluate(() => { const input = document.createElement('input'); input.type = 'file'; input.id = 'disk-provenance-probe'; document.body.append(input) })
     await page.locator('#disk-provenance-probe').setInputFiles(documentPath)
     const files = await page.evaluate(async id => {

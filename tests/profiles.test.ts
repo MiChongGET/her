@@ -34,13 +34,13 @@ function setup() {
   return { store, profiles: new ProfileService(store, codec), file, codec }
 }
 
-const base = { authMethod: 'none' as const, name: '我的服务', protocol: 'openai' as const, baseUrl: 'https://models.example.com/proxy/v1/', model: 'my-model' }
+const base = { contextWindow: 128000, authMethod: 'none' as const, name: '我的服务', protocol: 'openai' as const, baseUrl: 'https://models.example.com/proxy/v1/', model: 'my-model' }
 
 describe('model configuration and credential boundary', () => {
   it('stores secrets encrypted and never returns them in the public profile', async () => {
     const { store, profiles, file } = setup()
     const profile = await profiles.save({
-      ...base, authMethod: 'api-key' as const, apiKey: 'private-api-key-for-test', customHeaders: { 'X-Token': 'private-header-for-test' }
+      ...base, contextWindow: 128000, authMethod: 'api-key' as const, apiKey: 'private-api-key-for-test', customHeaders: { 'X-Token': 'private-header-for-test' }
     })
     expect(profile).toMatchObject({ hasApiKey: true, hasCustomHeaders: true, baseUrl: 'https://models.example.com/proxy/v1' })
     expect(profile).not.toHaveProperty('apiKey')
@@ -56,8 +56,8 @@ describe('model configuration and credential boundary', () => {
 
   it('preserves omitted credentials, but explicitly clears empty credentials', async () => {
     const { store, profiles } = setup()
-    const created = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' } })
-    await profiles.save({ ...base, id: created.id, name: '改个名字' })
+    const created = await profiles.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' } })
+    await profiles.save({ ...base, authMethod: 'api-key', id: created.id, name: '改个名字' })
     expect(await profiles.resolve(created.id)).toMatchObject({
       apiKey: 'original-secret', customHeaders: { 'X-Test': 'original-header' }
     })
@@ -83,19 +83,19 @@ describe('model configuration and credential boundary', () => {
     await expect(profiles.save({ ...base, baseUrl: 'https://user:secret@example.com/v1' })).rejects.toThrow('地址')
     await expect(profiles.save({ ...base, baseUrl: 'https://example.com/v1?token=secret' })).rejects.toThrow('地址')
     await expect(profiles.save({ ...base, protocol: 'unknown' as 'openai' })).rejects.toThrow('协议')
-    await expect(profiles.save({ ...base, authMethod: 'headers' as const, customHeaders: { 'X-Key': 'one\r\ntwo' } })).rejects.toThrow('请求头')
+    await expect(profiles.save({ ...base, contextWindow: 128000, authMethod: 'headers' as const, customHeaders: { 'X-Key': 'one\r\ntwo' } })).rejects.toThrow('请求头')
     expect(profiles.list()).toEqual([])
     store.close()
   })
 
   it('fails closed if credential protection fails and leaves the old configuration intact', async () => {
     const { store, profiles } = setup()
-    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'original-secret' })
+    const original = await profiles.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, apiKey: 'original-secret' })
     const broken = new ProfileService(store, {
       encrypt: async () => { throw new Error('凭据保护不可用') },
       decrypt: async () => { throw new Error('凭据保护不可用') }
     })
-    await expect(broken.save({ ...base, authMethod: 'api-key' as const, id: original.id, apiKey: 'replacement-secret' })).rejects.toThrow()
+    await expect(broken.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, id: original.id, apiKey: 'replacement-secret' })).rejects.toThrow()
     expect(await profiles.resolve(original.id)).toMatchObject({ apiKey: 'original-secret', model: 'my-model' })
     store.close()
   })
@@ -112,12 +112,12 @@ describe('model configuration and credential boundary', () => {
 
   it('can clear or fully replace old credentials even when the old ciphertext cannot be decrypted', async () => {
     const { store, profiles, codec } = setup()
-    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'old-key', customHeaders: { 'X-Test': 'old-header' } })
+    const original = await profiles.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, apiKey: 'old-key', customHeaders: { 'X-Test': 'old-header' } })
     const unavailable = new ProfileService(store, {
       encrypt: codec.encrypt,
       decrypt: async () => { throw new Error('old credentials unavailable') }
     })
-    await expect(unavailable.save({ ...base, authMethod: 'api-key' as const, id: original.id, apiKey: 'new-key', customHeaders: {} }))
+    await expect(unavailable.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, id: original.id, apiKey: 'new-key', customHeaders: {} }))
       .resolves.toMatchObject({ hasApiKey: true, hasCustomHeaders: false })
     expect(await profiles.resolve(original.id)).toMatchObject({ apiKey: 'new-key', customHeaders: {} })
     await expect(unavailable.save({ ...base, id: original.id, apiKey: '', customHeaders: {} }))
@@ -128,7 +128,7 @@ describe('model configuration and credential boundary', () => {
 
   it('preserves a test completed during a name-only save and keeps its connection revision valid', async () => {
     const { store, profiles, codec } = setup()
-    const original = await profiles.save({ ...base, authMethod: 'api-key' as const, apiKey: 'existing-key' })
+    const original = await profiles.save({ ...base, contextWindow: 128000, authMethod: 'api-key' as const, apiKey: 'existing-key' })
     const revision = profiles.revision(original.id)
     let release!: () => void
     let entered!: () => void
@@ -138,7 +138,7 @@ describe('model configuration and credential boundary', () => {
       decrypt: codec.decrypt,
       encrypt: async text => { entered(); await gate; return codec.encrypt(text) }
     })
-    const saving = delayed.save({ ...base, id: original.id, name: 'new name' })
+    const saving = delayed.save({ ...base, authMethod: 'api-key', id: original.id, name: 'new name' })
     await ready
     expect(profiles.recordTest(original.id, 'chat', { status: 'passed', message: 'connected' }, revision)).toBe(true)
     release()
@@ -160,11 +160,11 @@ describe('OpenAI Responses protocol', () => {
     store.close()
   })
 
-  it('discards maxOutputTokens when saving an openai-responses service', async () => {
+  it('persists maxOutputTokens for an openai-responses custom service', async () => {
     const { store, profiles } = setup()
     const saved = await profiles.save({ ...responses, maxOutputTokens: 8192 })
-    expect(saved).not.toHaveProperty('maxOutputTokens')
-    expect(await profiles.resolve(saved.id)).not.toHaveProperty('maxOutputTokens')
+    expect(saved.maxOutputTokens).toBe(8192)
+    expect((await profiles.resolve(saved.id)).maxOutputTokens).toBe(8192)
     store.close()
   })
 
@@ -221,13 +221,13 @@ describe('Anthropic maximum output tokens', () => {
     store.close()
   })
 
-  it('discards the value when the protocol changes to OpenAI and never stores it for OpenAI', async () => {
+  it('keeps the configured output limit across protocol changes', async () => {
     const { store, profiles } = setup()
     const saved = await profiles.save({ ...claude, maxOutputTokens: 8192 })
     await profiles.save({ ...base, id: saved.id, maxOutputTokens: 8192 })
-    expect(profiles.list()[0]).not.toHaveProperty('maxOutputTokens')
+    expect(profiles.list()[0].maxOutputTokens).toBe(8192)
     await profiles.save({ ...claude, id: saved.id })
-    expect(profiles.list()[0]).not.toHaveProperty('maxOutputTokens')
+    expect(profiles.list()[0].maxOutputTokens).toBe(8192)
     store.close()
   })
 
@@ -346,12 +346,12 @@ describe('per-model 1M output limit', () => {
     store.close()
   })
 
-  it('keeps the switch but drops the service override when the protocol changes away from Anthropic', async () => {
+  it('keeps the switch and service override when the protocol changes', async () => {
     const { store, profiles } = setup()
     const saved = await profiles.save({ ...claude, models, maxOutputTokens: 8192 })
     const changed = await profiles.save({ ...base, id: saved.id, models, maxOutputTokens: 8192 })
     expect(changed.models[0].longOutput).toBe(true)
-    expect(changed).not.toHaveProperty('maxOutputTokens')
+    expect(changed.maxOutputTokens).toBe(8192)
     store.close()
   })
 })
@@ -371,4 +371,44 @@ describe('vision connection tests and legacy model tests', () => {
   })
 
 
+})
+
+describe('Pi model catalog and explicit custom capacities', () => {
+  it('rejects a custom service with missing context capacity before saving anything', async () => {
+    const { store, profiles } = setup()
+    await expect(profiles.save({ ...base, contextWindow: undefined })).rejects.toThrow('上下文')
+    await expect(profiles.save({ ...base, contextWindow: null as unknown as number })).rejects.toThrow('上下文')
+    expect(profiles.list()).toEqual([])
+    store.close()
+  })
+
+  it('returns configured custom capacity to the renderer and runtime', async () => {
+    const { store, profiles } = setup()
+    const saved = await profiles.save({ ...base, contextWindow: 8192 })
+    expect(saved.contextWindow).toBe(8192)
+    expect((await profiles.resolve(saved.id)).contextWindow).toBe(8192)
+    store.close()
+  })
+
+  it('takes catalog protocol, window, image capability and output limit from Pi instead of caller values', async () => {
+    const { store, profiles } = setup()
+    const catalog = await profiles.listCatalog()
+    const selected = catalog.find(item => item.protocol === 'anthropic' && item.multimodal)!
+    expect(selected.contextWindow).toBeGreaterThan(0)
+    const saved = await profiles.save({ ...base, model: selected.id, catalogProvider: selected.provider, contextWindow: 1024 })
+    expect(saved.protocol).toBe('anthropic')
+    expect(saved.models[0].catalogProvider).toBe(selected.provider)
+    expect(await profiles.resolve(saved.id)).toMatchObject({ contextWindow: selected.contextWindow, maxOutputTokens: selected.maxOutputTokens, multimodal: true })
+    expect(saved.contextWindow).toBe(selected.contextWindow)
+    store.close()
+  })
+
+  it('rejects unknown authentication modes and clears credentials when explicitly switching to none', async () => {
+    const { store, profiles } = setup()
+    await expect(profiles.save({ ...base, contextWindow: 8192, authMethod: 'invalid' as 'none' })).rejects.toThrow('认证')
+    const saved = await profiles.save({ ...base, contextWindow: 8192, authMethod: 'api-key', apiKey: 'old-key' })
+    await profiles.save({ ...saved, contextWindow: 128000, authMethod: 'none' })
+    expect(await profiles.resolve(saved.id)).toMatchObject({ apiKey: '', customHeaders: {} })
+    store.close()
+  })
 })

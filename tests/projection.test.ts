@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { openConversationHistory } from '../src/core/agent/factory'
 import { startFixtureServer } from './pi-sdk/wire'
-import { harness, harnessCleanup } from './helpers/host-harness'
+import { approveNextTool, harness, harnessCleanup } from './helpers/host-harness'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
@@ -11,7 +11,7 @@ afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCle
 async function withHistory(turns = 2) {
   const s = await startFixtureServer('openai', 'text'); cleanup.push(s.close)
   const f = harness()
-  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
   for (let i = 0; i < turns; i++) {
     const sent = await f.send(f.id, p.id, `question ${i}`)
     await expect.poll(() => f.finished(sent.requestId)?.state, { timeout: 10_000 }).toBe('completed')
@@ -107,4 +107,24 @@ describe('catching up when Pi has entries the projection has not seen', () => {
     expect(new Set(messages.map(message => message.id)).size).toBe(messages.length)
     expect(rows(f)).toHaveLength(messages.length)
   })
+})
+
+it('restores structured tool results from Pi history and keeps host metadata out of model messages', async () => {
+  const { SimpleToolRegistry } = await import('../src/core/tools/registry')
+  const { TOOL_NAME } = await import('./pi-sdk/wire')
+  const registry = new SimpleToolRegistry()
+  registry.register({ name: TOOL_NAME, description: 'read', parameters: { type: 'object', properties: { ok: { type: 'boolean' } } } },
+    async () => ({ content: [{ type: 'text', text: 'tool answer' }], structuredContent: { text: 'model-visible-result' }, meta: { hostVerified: 'verified-result' } }),
+    { assess: async () => ({ effect: 'read', target: 'x', summary: 'read' }) })
+  const server = await startFixtureServer('openai', ['tool', 'text']); cleanup.push(server.close)
+  const f = harness(undefined, async () => registry.snapshot())
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
+  const sent = await f.send(f.id, p.id, 'read')
+  await approveNextTool(f.chat, f.id)
+  await expect.poll(() => f.finished(sent.requestId)?.state).toBe('completed')
+  f.store.replaceMessageProjection(f.id, [], null)
+  expect((await f.chat.getMessages(f.id)).at(-1)?.toolCalls).toEqual([expect.objectContaining({ name: TOOL_NAME, status: 'succeeded', result: expect.objectContaining({ structuredContent: { text: 'model-visible-result' }, meta: { hostVerified: 'verified-result' } }) })])
+  expect(JSON.stringify(server.requests[1].body)).toContain('tool answer')
+  expect(JSON.stringify(server.requests[1].body)).toContain('model-visible-result')
+  expect(JSON.stringify(server.requests[1].body)).not.toContain('verified-result')
 })

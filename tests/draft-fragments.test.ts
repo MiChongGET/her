@@ -12,7 +12,7 @@ afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCle
 async function stoppedMidReply() {
   const s = await startFixtureServer('openai', ['hang', 'text', 'text']); cleanup.push(s.close)
   const f = harness()
-  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
   const first = await f.send(f.id, p.id, 'say something')
   await expect.poll(() => f.events.some(event => event.message.content.includes('你好')), { timeout: 10_000 }).toBe(true)
   f.chat.cancel(first.requestId)

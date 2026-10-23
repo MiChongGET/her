@@ -68,7 +68,7 @@ for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
     const server = await startFixtureServer(protocol, 'text')
     const f = fixture()
     try {
-      const profile = await f.profiles.save({ name: 'fixture', protocol, baseUrl: server.baseUrl + '/prefix/v1', model: 'test-model', authMethod: 'api-key', apiKey: 'synthetic-credential-fixture' })
+      const profile = await f.profiles.save({ name: 'fixture', protocol, baseUrl: server.baseUrl + '/prefix/v1', model: 'test-model', contextWindow: 128000, authMethod: 'api-key', apiKey: 'synthetic-credential-fixture' })
       const requestId = randomUUID()
       const sent = await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'hello' })
       await expect.poll(() => f.requests.find(event => event.requestId === requestId && event.state === 'completed')).toBeDefined()
@@ -100,7 +100,7 @@ for (const scenario of ['http-error', 'missing-terminal', 'truncated', 'empty-te
     const server = await startFixtureServer('anthropic', scenario)
     const f = fixture()
     try {
-      const profile = await f.profiles.save({ name: 'fixture', protocol: 'anthropic', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+      const profile = await f.profiles.save({ name: 'fixture', protocol: 'anthropic', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
       const requestId = randomUUID()
       await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'hello' })
       await expect.poll(() => f.requests.find(event => event.requestId === requestId && event.state === 'failed'), { timeout: 5000 }).toBeDefined()
@@ -119,7 +119,7 @@ it('stops an in-flight stream and allows the conversation to send again', async 
   const server = await startFixtureServer('openai-responses', ['hang', 'text'])
   const f = fixture()
   try {
-    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai-responses', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai-responses', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const requestId = randomUUID()
     await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'hello' })
     await expect.poll(() => server.requests.length).toBe(1)
@@ -146,7 +146,7 @@ it('does not mark an OpenAI stream complete when EOF arrives before DONE', async
   const server = await startFixtureServer('openai', 'missing-terminal')
   const f = fixture()
   try {
-    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     await f.chat.send({ requestId: randomUUID(), conversationId: f.id, profileId: profile.id, content: 'hello' })
     await expect.poll(() => f.chat.getActiveRequest()).toBeNull()
     expect((await f.chat.getMessages(f.id))[1].status).toBe('failed')
@@ -159,7 +159,7 @@ it('honors stop while the saved credentials are still being read', async () => {
   const gate = new Promise<void>(resolve => { release = resolve })
   const f = fixture({ ...codec, decrypt: async bytes => { await gate; return bytes.toString() } })
   try {
-    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', authMethod: 'api-key', apiKey: 'fixture-key' })
+    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: server.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'api-key', apiKey: 'fixture-key' })
     const requestId = randomUUID()
     const sending = f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'hello' })
     f.chat.cancel(requestId)
@@ -173,7 +173,7 @@ it('honors stop while the saved credentials are still being read', async () => {
 it('retains an admitted user message and cancelled reply when stopped during session initialization', async () => {
   const f = fixture()
   try {
-    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: 'http://127.0.0.1:9/v1', model: 'test-model', authMethod: 'none' })
+    const profile = await f.profiles.save({ name: 'fixture', protocol: 'openai', baseUrl: 'http://127.0.0.1:9/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const requestId = randomUUID()
     const sent = await f.chat.send({ requestId, conversationId: f.id, profileId: profile.id, content: 'keep this message' })
     f.chat.cancel(requestId)

@@ -1,0 +1,44 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { _electron, expect, test } from '@playwright/test'
+
+test('built-in skill preferences and source text work through real Electron IPC and survive restart', async ({}, testInfo) => {
+  const directory = mkdtempSync(join(tmpdir(), 'her-skills-'))
+  const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
+  const launch = () => _electron.launch({ ...(process.env.HER_TEST_APP_EXECUTABLE ? { executablePath: process.env.HER_TEST_APP_EXECUTABLE, args: [] } : { args: [resolve('out/main/index.js')] }), env: { ...env, HER_DATA_DIR: directory } })
+  let app = await launch()
+  try {
+    let page = await app.firstWindow()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: '技能', exact: true }).click()
+    let browser = page.getByRole('article', { name: 'ego-browser', exact: true })
+    await expect(browser.getByRole('checkbox', { name: '启用 ego-browser' })).toBeChecked()
+    await expect(page.getByRole('article', { name: 'Peekaboo' })).toBeVisible()
+    await browser.getByText('查看原文', { exact: true }).click()
+    await expect(browser.locator('pre')).toContainText('ego-browser skill')
+    await browser.getByRole('checkbox').click()
+    await expect(browser.getByRole('checkbox')).not.toBeChecked()
+    await expect(browser.getByText('已停用', { exact: true })).toBeVisible()
+    const skills = await page.evaluate(() => window.her.listSkills())
+    expect(skills.find(skill => skill.id === 'ego-browser')?.enabled).toBe(false)
+    expect(skills.find(skill => skill.id === 'peekaboo')?.enabled).toBe(true)
+    await expect(page.evaluate(() => window.her.setSkillEnabled('unknown-skill', true))).rejects.toThrow()
+    for (const [width, height] of [[850, 620], [1140, 800]]) {
+      await app.evaluate(({ BrowserWindow }, size) => BrowserWindow.getAllWindows()[0].setSize(size.width, size.height), { width, height })
+      expect(await page.getByRole('dialog', { name: '设置', exact: true }).evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1)
+      await page.screenshot({ path: testInfo.outputPath(`skills-${width}.png`) })
+    }
+    await page.getByRole('tab', { name: 'MCP 工具', exact: true }).click()
+    expect((await page.evaluate(() => window.her.listMcpPresets())).map(preset => preset.id)).not.toContain('playwright')
+    await app.close()
+    app = await launch(); page = await app.firstWindow()
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: '技能', exact: true }).click()
+    browser = page.getByRole('article', { name: 'ego-browser', exact: true })
+    await expect(browser.getByRole('checkbox')).not.toBeChecked()
+    await browser.getByRole('checkbox').click()
+    await expect(browser.getByRole('checkbox')).toBeChecked()
+    await expect(browser.getByText('已启用', { exact: true })).toBeVisible()
+  } finally { await app.close(); rmSync(directory, { recursive: true, force: true }) }
+})

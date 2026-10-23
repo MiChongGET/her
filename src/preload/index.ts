@@ -1,5 +1,17 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { ChatEvent, HerApi, RequestEvent } from '../shared/types'
+import type { HerApi, WorkspaceChatEvent, WorkspaceRequestEvent, WorkspaceTaskEvent, PendingActionNotice } from '../shared/types'
+
+function applyEffectiveAppearance(value: 'light' | 'dark'): void {
+  if (typeof document === 'undefined') return
+  const apply = () => document.documentElement.setAttribute('data-appearance', value)
+  if (document.documentElement) apply()
+  else document.addEventListener('DOMContentLoaded', apply, { once: true })
+}
+
+applyEffectiveAppearance(process.argv.includes('--her-effective-appearance=dark') ? 'dark' : 'light')
+ipcRenderer.on('her:appearance-effective', (_event, value: unknown) => {
+  if (value === 'dark' || value === 'light') applyEffectiveAppearance(value)
+})
 
 // 开发模式下启用 IPC 调试日志
 const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_RENDERER_URL
@@ -26,6 +38,19 @@ const createIpcProxy = <T extends (...args: any[]) => any>(channel: string, fn: 
 }
 
 const api: HerApi = {
+  getDelegationDetails: createIpcProxy('her:delegation-details', (conversationId) => ipcRenderer.invoke('her:delegation-details', conversationId)),
+  previewTopicHandoff: createIpcProxy('her:topic-handoff-preview', input => ipcRenderer.invoke('her:topic-handoff-preview', input)),
+  commitTopicHandoff: createIpcProxy('her:topic-handoff-commit', input => ipcRenderer.invoke('her:topic-handoff-commit', input)),
+  getTopicHandoffOperation: createIpcProxy('her:topic-handoff-status', id => ipcRenderer.invoke('her:topic-handoff-status', id)),
+  pauseDelegation: createIpcProxy('her:delegation-pause', (id, revision) => ipcRenderer.invoke('her:delegation-pause', id, revision)),
+  cancelDelegation: createIpcProxy('her:delegation-cancel', (id, revision) => ipcRenderer.invoke('her:delegation-cancel', id, revision)),
+  resumeDelegation: createIpcProxy('her:delegation-resume', (id, revision, controls) => ipcRenderer.invoke('her:delegation-resume', id, revision, controls)),
+  approveDelegationScope: createIpcProxy('her:delegation-scope-approve', (id, revision) => ipcRenderer.invoke('her:delegation-scope-approve', id, revision)),
+  rejectDelegationScope: createIpcProxy('her:delegation-scope-reject', (id, revision) => ipcRenderer.invoke('her:delegation-scope-reject', id, revision)),
+  resolveDelegationControl: createIpcProxy('her:delegation-control-resolve', (input) => ipcRenderer.invoke('her:delegation-control-resolve', input)),
+  prepareDelegationDenial: createIpcProxy('her:delegation-denial-prepare', (input) => ipcRenderer.invoke('her:delegation-denial-prepare', input)),
+  confirmDelegationDenial: createIpcProxy('her:delegation-denial-confirm', (input) => ipcRenderer.invoke('her:delegation-denial-confirm', input)),
+
   addDroppedFiles: createIpcProxy('her:files-drop', async (conversationId, files) => {
     if (!Array.isArray(files) || !files.length || files.length > 100) throw new Error('请拖入磁盘上的文件。')
     const paths = files.map(file => {
@@ -40,6 +65,7 @@ const api: HerApi = {
   getFilePreview: createIpcProxy('her:files-preview', input => ipcRenderer.invoke('her:files-preview', input)),
 
   selectFiles: createIpcProxy('her:files-select', input => ipcRenderer.invoke('her:files-select', input)),
+  validateDraftFiles: createIpcProxy('her:files-validate-draft', input => ipcRenderer.invoke('her:files-validate-draft', input)),
   listFileGrants: createIpcProxy('her:files-list', id => ipcRenderer.invoke('her:files-list', id)),
   revokeFileGrant: createIpcProxy('her:files-revoke', id => ipcRenderer.invoke('her:files-revoke', id)),
   listMcpPresets: createIpcProxy('her:mcp-presets', () => ipcRenderer.invoke('her:mcp-presets')),
@@ -58,6 +84,7 @@ const api: HerApi = {
   revokeConversationApprovals: createIpcProxy('her:task-revoke-approval', id => ipcRenderer.invoke('her:task-revoke-approval', id)),
   resolveUnknownToolCall: createIpcProxy('her:task-resolve-unknown', input => ipcRenderer.invoke('her:task-resolve-unknown', input)),
   continueTask: createIpcProxy('her:task-continue', input => ipcRenderer.invoke('her:task-continue', input)),
+  getConversationContext: createIpcProxy('her:context-usage', input => ipcRenderer.invoke('her:context-usage', input)),
   getQueue: createIpcProxy('her:queue-get', id => ipcRenderer.invoke('her:queue-get', id)),
   cancelQueuedMessage: createIpcProxy('her:queue-cancel', (conversationId, requestId) => ipcRenderer.invoke('her:queue-cancel', conversationId, requestId)),
   resumeQueue: createIpcProxy('her:queue-resume', id => ipcRenderer.invoke('her:queue-resume', id)),
@@ -65,17 +92,34 @@ const api: HerApi = {
   stopCompaction: createIpcProxy('her:compact-stop', id => ipcRenderer.invoke('her:compact-stop', id)),
   switchModel: createIpcProxy('her:model-switch', input => ipcRenderer.invoke('her:model-switch', input)),
   getArtifactPreview: createIpcProxy('her:artifact-preview', (id, conversationId) => ipcRenderer.invoke('her:artifact-preview', id, conversationId)),
-  onRequestEvent: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: RequestEvent) => callback(payload)
-    ipcRenderer.on('her:request-event', listener)
-    return () => { ipcRenderer.removeListener('her:request-event', listener) }
+  selectWorkspace: createIpcProxy('her:workspace-select', input => ipcRenderer.invoke('her:workspace-select', input)),
+  listWorkItems: createIpcProxy('her:workspace-list', () => ipcRenderer.invoke('her:workspace-list')),
+  getPendingActions: createIpcProxy('her:workspace-pending', () => ipcRenderer.invoke('her:workspace-pending')),
+  resolvePendingAction: createIpcProxy('her:workspace-resolve-pending', input => ipcRenderer.invoke('her:workspace-resolve-pending', input)),
+  onWorkspaceRequestEvent: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: WorkspaceRequestEvent) => callback(payload)
+    ipcRenderer.on('her:workspace-request-event', listener)
+    return () => { ipcRenderer.removeListener('her:workspace-request-event', listener) }
   },
-  onTaskEvent: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: ChatEvent) => { if (payload.task) callback(payload.task) }
-    ipcRenderer.on('her:chat-event', listener)
-    return () => { ipcRenderer.removeListener('her:chat-event', listener) }
+  onWorkspaceTaskEvent: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: WorkspaceTaskEvent) => callback(payload)
+    ipcRenderer.on('her:workspace-task-event', listener)
+    return () => { ipcRenderer.removeListener('her:workspace-task-event', listener) }
+  },
+  getPendingActionOpen: createIpcProxy('her:workspace-pending-open', () => ipcRenderer.invoke('her:workspace-pending-open')),
+  ackPendingActionOpen: createIpcProxy('her:workspace-pending-ack', input => ipcRenderer.invoke('her:workspace-pending-ack', input)),
+  onPendingActionOpen: callback => {
+    const listener = () => callback()
+    ipcRenderer.on('her:workspace-pending-open-event', listener)
+    return () => { ipcRenderer.removeListener('her:workspace-pending-open-event', listener) }
+  },
+  onPendingActions: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: PendingActionNotice[]) => callback(payload)
+    ipcRenderer.on('her:workspace-pending-event', listener)
+    return () => { ipcRenderer.removeListener('her:workspace-pending-event', listener) }
   },
   getBootstrap: createIpcProxy('her:bootstrap', () => ipcRenderer.invoke('her:bootstrap')),
+  listModelCatalog: createIpcProxy('her:profile-catalog', () => ipcRenderer.invoke('her:profile-catalog')),
   saveProfile: createIpcProxy('her:profile-save', input => ipcRenderer.invoke('her:profile-save', input)),
   deleteProfile: createIpcProxy('her:profile-delete', id => ipcRenderer.invoke('her:profile-delete', id)),
   selectProfile: createIpcProxy('her:profile-select', id => ipcRenderer.invoke('her:profile-select', id)),
@@ -91,16 +135,19 @@ const api: HerApi = {
   sendMessage: createIpcProxy('her:message-send', input => ipcRenderer.invoke('her:message-send', input)),
   cancelMessage: createIpcProxy('her:message-cancel', requestId => ipcRenderer.invoke('her:message-cancel', requestId)),
   setDesktopPreferences: createIpcProxy('her:desktop-save', input => ipcRenderer.invoke('her:desktop-save', input)),
+  setAppearance: createIpcProxy('her:appearance-set', appearance => ipcRenderer.invoke('her:appearance-set', appearance)),
   getSystemPrompt: createIpcProxy('her:system-prompt-get', () => ipcRenderer.invoke('her:system-prompt-get')),
+  listSkills: createIpcProxy('her:skills-list', () => ipcRenderer.invoke('her:skills-list')),
+  setSkillEnabled: createIpcProxy('her:skills-enable', (id, enabled) => ipcRenderer.invoke('her:skills-enable', id, enabled)),
   setSystemPrompt: createIpcProxy('her:system-prompt-set', prompt => ipcRenderer.invoke('her:system-prompt-set', prompt)),
   getDefaultSystemPrompt: createIpcProxy('her:system-prompt-default', () => ipcRenderer.invoke('her:system-prompt-default')),
-  onChatEvent: callback => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: ChatEvent) => {
-      if (isDev) console.log('[IPC] ← her:chat-event')
+  onWorkspaceChatEvent: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: WorkspaceChatEvent) => {
+      if (isDev) console.log('[IPC] ← her:workspace-chat-event')
       callback(payload)
     }
-    ipcRenderer.on('her:chat-event', listener)
-    return () => { ipcRenderer.removeListener('her:chat-event', listener) }
+    ipcRenderer.on('her:workspace-chat-event', listener)
+    return () => { ipcRenderer.removeListener('her:workspace-chat-event', listener) }
   },
   openExternal: createIpcProxy('her:external', url => ipcRenderer.invoke('her:external', url))
 }

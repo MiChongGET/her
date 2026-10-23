@@ -9,18 +9,20 @@ test('new conversation loads grants and messages, sends a real streaming request
   const directory = mkdtempSync(join(tmpdir(), 'her-chat-runtime-'))
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] =>
     entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
-  const app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+  const app = await _electron.launch({ ...(process.env.HER_TEST_APP_EXECUTABLE ? { executablePath: process.env.HER_TEST_APP_EXECUTABLE, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: directory } })
   try {
     const page = await app.firstWindow()
-    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
     await page.evaluate(async baseUrl => {
-      const profile = await window.her.saveProfile({ name: 'fixture', protocol: 'openai-responses', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+      const profile = await window.her.saveProfile({ name: 'fixture', protocol: 'openai-responses', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
       await window.her.selectProfile(profile.id)
     }, server.baseUrl)
     await page.reload()
-    await page.locator('button.new-chat').click()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.getByRole('button', { name: '另开一个话题' }).first().click()
     const state = await page.evaluate(() => window.her.getBootstrap())
-    const id = state.conversations[0].id
+    const id = (await page.evaluate(() => window.her.listWorkItems()))[0].conversation.id
+    expect(id).not.toBe(state.dailyConversationId)
     expect(await page.evaluate(id => window.her.getMessages(id), id)).toEqual([])
     expect(await page.evaluate(id => window.her.listFileGrants(id), id)).toEqual([])
     await expect(page.getByText(/hasConversation|无法读取这段对话|资料读取失败/)).toHaveCount(0)
@@ -33,6 +35,8 @@ test('new conversation loads grants and messages, sends a real streaming request
     expect(server.requests[0].body).toMatchObject({ stream: true, model: 'test-model' })
     expect(server.requests[0].headers.authorization).toBeUndefined()
     await page.reload()
+    await page.getByRole('button', { name: '一起在做的事', exact: true }).click()
+    await page.locator('.topic-card-main').first().click()
     await expect(page.locator('.message-user')).toContainText('hello from the new conversation')
     await expect(page.locator('.message-assistant')).toContainText('你好🌙')
     await expect(page.getByText(/hasConversation|无法读取这段对话|资料读取失败/)).toHaveCount(0)

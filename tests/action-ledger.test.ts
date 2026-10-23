@@ -30,9 +30,10 @@ const schema = { type: 'object', properties: { target: { type: 'string' } }, req
 function fixture(store: HerStore, executor: ToolExecutor, options: ToolRegistrationOptions = {}, effect: ActionAssessment['effect'] = 'send') {
   const registry = new SimpleToolRegistry(), ledger = new ActionLedger(store)
   registry.register({ name: 'act', description: 'act', parameters: schema }, executor,
-    { assess: async args => ({ effect, target: String(args.target), summary: 's' }), allowAllOperations: true, ...options })
+    { assess: async args => ({ effect, target: String(args.target), summary: 's' }),
+      describeAction: async args => ({ effect, targetId: String(args.target), target: String(args.target), capability: 'fixture.action', confirmation: 'always', opaque: false, dataClasses: [], preview: { fields: [] }, summary: 'fixture action', actionLabel: '执行' }), ...options })
   const run = (t: { conversationId: string; taskId: string }, callId: string, target = 'alice', signal = new AbortController().signal) =>
-    registry.snapshot().execute('act', { target }, { runId: t.taskId, conversationId: t.conversationId, callId, signal, ledger })
+    registry.snapshot().execute('act', { target }, { runId: t.taskId, conversationId: t.conversationId, callId, signal, ledger, authorize: async () => {} })
   return { registry, ledger, run }
 }
 
@@ -178,8 +179,9 @@ describe('target quarantine', () => {
     const registry = new SimpleToolRegistry()
     let fail = false
     registry.register({ name: 'look', description: 'look', parameters: schema }, async () => fail ? { isError: true, content: [{ type: 'text', text: 'x' }] } : { content: [{ type: 'text', text: 'seen' }] },
-      { assess: async args => ({ effect: 'read', target: String(args.target), summary: 'look' }) })
-    const look = (target: string) => registry.snapshot().execute('look', { target }, { runId: t.taskId, conversationId: t.conversationId, callId: randomUUID(), signal: new AbortController().signal, ledger: f.ledger })
+      { assess: async args => ({ effect: 'read', target: String(args.target), summary: 'look' }),
+        describeAction: async args => ({ effect: 'read', targetId: String(args.target), target: String(args.target), capability: 'fixture.read', confirmation: 'scope', opaque: false, dataClasses: [], preview: { fields: [] }, summary: 'look', actionLabel: 'look' }) })
+    const look = (target: string) => registry.snapshot().execute('look', { target }, { runId: t.taskId, conversationId: t.conversationId, callId: randomUUID(), signal: new AbortController().signal, ledger: f.ledger, authorize: async () => {} })
     fail = true; await look('alice')
     expect(f.ledger.quarantined()).toEqual(['alice'])
     fail = false; await look('bob')
@@ -239,14 +241,31 @@ describe('recovered interaction', () => {
     return { ledger, prompts, run }
   }
 
-  it('a freshly observed interaction needs no prompt, but one on a recovered target does', async () => {
+  it('fresh observations and recovered targets both require exact approval without trusted scope', async () => {
     const { store } = open(), t = task(store), f = interact(store)
     await f.run(t, 'normal')
-    expect(f.prompts).toEqual([])
+    expect(f.prompts).toHaveLength(1)
     store.quarantineTarget('alice', t.conversationId, t.taskId, 'normal')
     expect(f.ledger.resolve('alice', 'handled')).toBe(true)
     await f.run(t, 'after-recovery')
-    expect(f.prompts).toHaveLength(1)
+    expect(f.prompts).toHaveLength(2)
   })
 })
 
+
+
+it('an approved opaque read label cannot escape unknown-outcome accounting or clear quarantine', async () => {
+  const { store } = open(), t = task(store), registry = new SimpleToolRegistry(), ledger = new ActionLedger(store)
+  let dispatchCount = 0
+  registry.register({ name: 'opaque', description: 'claims read', parameters: schema }, async () => {
+    dispatchCount++; return { isError: true, content: [{ type: 'text', text: 'connection lost' }] }
+  }, { assess: async () => ({ effect: 'read', target: 'alice', summary: 'claims safe' }) })
+  const approvals = new ToolApprovalService(request => approvals.decide({ approvalId: request.id, revision: request.revision, decision: 'approve' }))
+  const run = (callId: string) => registry.execute('opaque', { target: 'alice' }, { runId: t.taskId, conversationId: t.conversationId,
+    callId, signal: new AbortController().signal, ledger, authorize: (assessment, context) => approvals.authorize(callId, assessment, context) })
+  await run('opaque-1')
+  expect(store.getToolCall(t.taskId, 'opaque-1')).toMatchObject({ effect: 'unknown', status: 'unknown' })
+  await expect(run('opaque-2')).rejects.toThrow('结果未知')
+  expect(dispatchCount).toBe(1)
+  expect(ledger.quarantined()).toEqual(['alice'])
+})

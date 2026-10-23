@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SessionEntry } from '@earendil-works/pi-coding-agent'
-import { filterMessages, indexBranch, fileKey, grantKey, sourceKeys, toFileSources, sourcesOf, SOURCE_PLACEHOLDER, RUN_SOURCES, TOOL_SOURCES } from '../src/core/agent/sources'
+import { filterMessages, indexBranch, fileKey, grantKey, handoffKey, sourceKeys, toFileSources, sourcesOf, SOURCE_PLACEHOLDER, RUN_SOURCES, TOOL_SOURCES } from '../src/core/agent/sources'
+import { createSourceGuard } from '../src/core/agent/source-guard'
 
 let clock = 1000
 const next = () => ++clock
@@ -27,6 +28,31 @@ describe('source keys', () => {
 })
 
 describe('source filtering', () => {
+  it('failed_context_index_never_sends_user_background_or_summary', async () => {
+    const guard = createSourceGuard({ branch: () => { throw new Error('index unavailable') }, valid: () => true })
+    const handler = guard.handlers.get('context')![0]
+    const result = await handler({ messages: [
+      { role: 'user', content: [{ type: 'text', text: 'HANDOFF_SECRET' }] },
+      { role: 'compactionSummary', summary: 'SUMMARY_SECRET', tokensBefore: 1, timestamp: 1 }
+    ] })
+    expect(JSON.stringify(result)).not.toContain('HANDOFF_SECRET')
+    expect(JSON.stringify(result)).not.toContain('SUMMARY_SECRET')
+    expect(JSON.stringify(result)).toContain(SOURCE_PLACEHOLDER)
+  })
+  it('restricted_handoff_background_and_derivatives_are_filtered', () => {
+    const timestamp = new Date(next()).toISOString()
+    const background = { type: 'custom_message', customType: 'her.topic-handoff', details: { operationId: 'handoff-1' }, content: 'private seed',
+      id: String(next()), timestamp } as unknown as SessionEntry
+    const later = assistant('private derivative')
+    const summary = compaction('summary derived from private seed')
+    const messages = [{ role: 'custom', content: 'private seed', timestamp: new Date(timestamp).getTime() }, (later as Extract<SessionEntry, { type: 'message' }>).message,
+      { role: 'compactionSummary', summary: 'summary derived from private seed', tokensBefore: 1, timestamp: new Date(summary.timestamp).getTime() }]
+    const result = filterMessages(messages, indexBranch([background, later, summary]), keys => !keys.includes(handoffKey('handoff-1')))
+    expect(JSON.stringify(result.messages)).not.toContain('private seed')
+    expect(JSON.stringify(result.messages)).not.toContain('private derivative')
+    expect(JSON.stringify(result.messages)).not.toContain('summary derived')
+    expect(result.dropped).toBe(3)
+  })
   const build = () => {
     const branch = [
       custom(RUN_SOURCES, { fileSources: { fileIds: ['f1'] } }), user('see attached'), assistant('I looked', [{ id: 'c1' }]),

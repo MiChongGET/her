@@ -3,10 +3,10 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import App from '../src/renderer/src/App'
-import type { BootstrapState, ChatEvent, ChatMessage, ConnectionTestResult, DesktopSettings, HerApi, ProviderProfile, SaveProfileInput, SendMessageInput, SendMessageResult, TestKind, TrashedConversation } from '../src/shared/types'
+import type { BootstrapState, ChatEvent, ChatMessage, ConnectionTestResult, DesktopSettings, HerApi, ProviderProfile, SaveProfileInput, SendMessageInput, SendMessageResult, TestKind, TrashedConversation, WorkspaceSnapshot, WorkspaceSelection, WorkspaceChatEvent, PendingActionNotice, WorkspaceTaskEvent, WorkspaceListItem } from '../src/shared/types'
 
 const profile: ProviderProfile = {
-  id: 'provider-1', name: '我的模型', protocol: 'openai', authMethod: 'api-key', baseUrl: 'https://example.com/proxy/v1', model: 'chat-model',
+  id: 'provider-1', name: '我的模型', protocol: 'openai', contextWindow: 128000, authMethod: 'api-key', baseUrl: 'https://example.com/proxy/v1', model: 'chat-model',
   hasApiKey: true, hasCustomHeaders: true,
   models: [{ id: 'chat-model', longOutput: false, multimodal: false, tests: { chat: { status: 'untested', message: '尚未测试' }, tools: { status: 'untested', message: '尚未测试' }, vision: { status: 'untested', message: '尚未测试' } } }]
 }
@@ -15,11 +15,29 @@ const userMessage: ChatMessage = { id: 'user-1', conversationId: conversation.id
 const assistantMessage: ChatMessage = { id: 'assistant-1', conversationId: conversation.id, role: 'assistant', content: '', status: 'streaming', createdAt: '2026-10-13T00:00:02Z', profileId: profile.id, model: profile.model }
 
 let bridge: HerApi
-let backendState: BootstrapState
+let backendState: BootstrapState & { conversations: typeof conversation[] }
+let backendActiveRequest: { requestId: string; conversationId: string } | null
+let selectionVersion: number
+let selectedWorkspace: WorkspaceSelection
+let emitWorkspace: (event: WorkspaceChatEvent) => void
+let emitWorkspaceTask: (event: WorkspaceTaskEvent) => void
+let emitPendingOpen: () => void
+let emitPending: (notices: PendingActionNotice[]) => void
+const dailyConversation = { ...conversation, id: 'daily', title: '日常' }
+async function snapshot(selection: WorkspaceSelection): Promise<WorkspaceSnapshot> {
+  selectedWorkspace = selection
+  const version = ++selectionVersion
+  const current = selection.section === 'daily' ? dailyConversation : backendState.conversations.find(item => item.id === selection.conversationId) ?? null
+  return { activeRequest: current?.id === backendActiveRequest?.conversationId ? backendActiveRequest : null, selection: { ...selection, ...(current ? { conversationId: current.id } : {}) }, version, conversation: current, topic: current ? { conversationId: current.id, kind: current.id === 'daily' ? 'daily' : 'work', shareProgress: false, shareRevision: 1 } : null, messages: current && current.id !== 'daily' ? await bridge.getMessages(current.id) : [], task: current && current.id !== 'daily' ? await bridge.getConversationTask(current.id) : null, workItems: selection.section === 'work' ? backendState.conversations.map(conversation => ({ conversation, topic: { conversationId: conversation.id, kind: 'work', shareProgress: false, shareRevision: 1 } })) : [] }
+}
 let trashedState: TrashedConversation[]
 let emit: (event: ChatEvent) => void
 let emitRequest: (event: import('../src/shared/types').RequestEvent) => void = () => {}
 let unsubscribe: ReturnType<typeof vi.fn>
+
+function createdSnapshot(id: string, title = conversation.title): WorkspaceSnapshot {
+  return { version: selectionVersion + 1, selection: { section: 'work', conversationId: id }, conversation: { ...conversation, id, title }, topic: { conversationId: id, kind: 'work', shareProgress: false, shareRevision: 1 }, messages: [], task: null, workItems: [] }
+}
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -31,12 +49,12 @@ function deferred<T>() {
 function commitProfile(input: SaveProfileInput) {
   const previous = backendState.profiles.find((item) => item.id === input.id)
   const saved: ProviderProfile = {
-    ...profile, id: input.id ?? 'provider-new', name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, model: input.model,
+    ...profile, id: input.id ?? 'provider-new', name: input.name, protocol: input.protocol, baseUrl: input.baseUrl, model: input.model, authMethod: input.authMethod, contextWindow: input.contextWindow, catalogProvider: input.catalogProvider,
     models: (input.models ?? [{ id: input.model }]).map((entry) => ({ id: entry.id, longOutput: entry.longOutput === true, multimodal: entry.multimodal === true, tests: previous?.models.find((old) => old.id === entry.id)?.tests ?? structuredClone(profile.models[0].tests) })),
     hasApiKey: input.apiKey === undefined ? previous?.hasApiKey ?? false : input.apiKey !== '',
     hasCustomHeaders: input.customHeaders === undefined ? previous?.hasCustomHeaders ?? false : Object.keys(input.customHeaders).length > 0
   }
-  const maxOutputTokens = input.protocol !== 'anthropic' ? undefined : input.maxOutputTokens === undefined ? previous?.maxOutputTokens : input.maxOutputTokens ?? undefined
+  const maxOutputTokens = input.maxOutputTokens === undefined ? previous?.maxOutputTokens : input.maxOutputTokens ?? undefined
   if (maxOutputTokens !== undefined) saved.maxOutputTokens = maxOutputTokens
   backendState.profiles = previous ? backendState.profiles.map((item) => item.id === saved.id ? saved : item) : [...backendState.profiles, saved]
   return structuredClone(saved)
@@ -48,36 +66,52 @@ function commitTest(id: string, kind: TestKind, result: ConnectionTestResult, mo
 }
 
 beforeEach(() => {
+  backendActiveRequest = null
+  selectionVersion = 0
+  selectedWorkspace = { section: 'daily' }
   unsubscribe = vi.fn()
   trashedState = []
   backendState = {
-    profiles: [structuredClone(profile)], conversations: [conversation],
-    settings: { activeProfileId: profile.id, shortcut: 'CommandOrControl+Shift+H', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false },
+    dailyConversationId: 'daily', profiles: [structuredClone(profile)], conversations: [conversation],
+    settings: { activeProfileId: profile.id, shortcut: 'CommandOrControl+Shift+H', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false, appearance: 'light' },
     appVersion: '0.1.0', dataDirectory: '/local/her'
   }
   emitRequest = () => {}
   bridge = {
+    previewTopicHandoff: vi.fn(), commitTopicHandoff: vi.fn(), getTopicHandoffOperation: vi.fn(),
+    getDelegationDetails: vi.fn().mockImplementation(async conversationId => ({ conversationId, delegations: [], scopes: [], controls: [] })),
+    pauseDelegation: vi.fn(), cancelDelegation: vi.fn(), resumeDelegation: vi.fn(), approveDelegationScope: vi.fn(), rejectDelegationScope: vi.fn(),
+    resolveDelegationControl: vi.fn(), prepareDelegationDenial: vi.fn(), confirmDelegationDenial: vi.fn(),
     addDroppedFiles: vi.fn().mockResolvedValue([]), listPersistentFileGrants: vi.fn().mockResolvedValue([]),
     getFilePreview: vi.fn().mockResolvedValue({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,aQ==' }), openFileSource: vi.fn().mockResolvedValue(undefined),
     selectFiles: vi.fn().mockResolvedValue({ grants: [], files: [] }),
+    validateDraftFiles: vi.fn().mockResolvedValue({ valid: [], invalidIds: [] }),
     listFileGrants: vi.fn().mockResolvedValue([]),
     revokeFileGrant: vi.fn().mockResolvedValue(undefined),
     listMcpPresets: vi.fn().mockResolvedValue([]), checkPresetDependencies: vi.fn().mockResolvedValue([]), createMcpPreset: vi.fn(),
-    onRequestEvent: vi.fn().mockImplementation(callback => { emitRequest = callback; return () => {} }),
+    onWorkspaceRequestEvent: vi.fn().mockImplementation(callback => { emitRequest = event => callback({ selectionVersion, event }); return () => {} }),
     listMcpServices: vi.fn().mockResolvedValue([]), getMcpEnvironment: vi.fn().mockResolvedValue({}), saveMcpService: vi.fn(), deleteMcpService: vi.fn(), testMcpService: vi.fn(),
     setMcpServiceEnabled: vi.fn(), listMcpTools: vi.fn().mockResolvedValue([]), getMcpStatus: vi.fn(),
+    getConversationContext: vi.fn().mockResolvedValue({ tokens: null, contextWindow: 128000 }),
     getQueue: vi.fn().mockImplementation(async (conversationId: string) => ({ conversationId, items: [], paused: null, running: false, compacting: false })),
     cancelQueuedMessage: vi.fn().mockResolvedValue(undefined), resumeQueue: vi.fn().mockResolvedValue(undefined), compactConversation: vi.fn().mockResolvedValue(undefined),
     stopCompaction: vi.fn().mockResolvedValue(undefined), switchModel: vi.fn().mockResolvedValue(undefined),
     getConversationTask: vi.fn().mockResolvedValue(null), decideToolApproval: vi.fn().mockResolvedValue(undefined), revokeConversationApprovals: vi.fn().mockResolvedValue(undefined),
     resolveUnknownToolCall: vi.fn(),
-    continueTask: vi.fn(), onTaskEvent: vi.fn().mockReturnValue(() => {}), getArtifactPreview: vi.fn(),
-    getBootstrap: vi.fn().mockImplementation(async () => structuredClone(backendState)),
+    continueTask: vi.fn(), onWorkspaceTaskEvent: vi.fn().mockImplementation(callback => { emitWorkspaceTask = callback; return () => {} }), getArtifactPreview: vi.fn(),
+    getBootstrap: vi.fn().mockImplementation(async () => { const { conversations: _, ...state } = backendState; return structuredClone(state) }),
+    selectWorkspace: vi.fn().mockImplementation(snapshot),
+    listWorkItems: vi.fn().mockImplementation(async () => backendState.conversations.map(conversation => ({ conversation, topic: { conversationId: conversation.id, kind: 'work', shareProgress: false, shareRevision: 1 } }))),
+    getPendingActions: vi.fn().mockResolvedValue([]), resolvePendingAction: vi.fn().mockResolvedValue(null),
+    getPendingActionOpen: vi.fn().mockResolvedValue(null), ackPendingActionOpen: vi.fn().mockResolvedValue(undefined),
+    onPendingActionOpen: vi.fn().mockImplementation(callback => { emitPendingOpen = callback; return () => {} }),
+    onPendingActions: vi.fn().mockImplementation(callback => { emitPending = callback; return () => {} }),
+    listModelCatalog: vi.fn().mockResolvedValue([]),
     saveProfile: vi.fn().mockImplementation(async (input) => commitProfile(input)),
     deleteProfile: vi.fn().mockImplementation(async (id) => { backendState.profiles = backendState.profiles.filter((item) => item.id !== id); if (backendState.settings.activeProfileId === id) backendState.settings.activeProfileId = null }),
     selectProfile: vi.fn().mockImplementation(async (id) => { backendState.settings.activeProfileId = id }),
     testProfile: vi.fn().mockImplementation(async (id, kind, model) => commitTest(id, kind, { status: 'passed', message: '连接成功' }, model)),
-    createConversation: vi.fn().mockResolvedValue({ ...conversation, id: 'conversation-2', title: '新的对话' }),
+    createConversation: vi.fn().mockImplementation(async () => { const created = { ...conversation, id: 'conversation-2', title: '新的对话' }; backendState.conversations.unshift(created); return snapshot({ section: 'work', conversationId: created.id }) }),
     renameConversation: vi.fn().mockImplementation(async (id: string, title: string) => {
       const clean = title.trim()
       if (!clean) throw new Error('请输入对话标题。')
@@ -112,10 +146,13 @@ beforeEach(() => {
     getMessages: vi.fn().mockResolvedValue([]),
     sendMessage: vi.fn().mockResolvedValue({ userMessage, assistantMessage }), cancelMessage: vi.fn().mockResolvedValue(undefined),
     setDesktopPreferences: vi.fn().mockImplementation(async (input) => { backendState.settings = { ...backendState.settings, ...input }; return structuredClone(backendState.settings) }),
+    setAppearance: vi.fn().mockImplementation(async appearance => { backendState.settings = { ...backendState.settings, appearance }; return structuredClone(backendState.settings) }),
     getSystemPrompt: vi.fn().mockResolvedValue(''),
+    listSkills: vi.fn().mockResolvedValue([]),
+    setSkillEnabled: vi.fn().mockResolvedValue([]),
     setSystemPrompt: vi.fn().mockResolvedValue(undefined),
-    getDefaultSystemPrompt: vi.fn().mockResolvedValue('你是 Her，一个私人 AI 助手。'),
-    onChatEvent: vi.fn().mockImplementation((callback) => { emit = callback; return unsubscribe }),
+    getDefaultSystemPrompt: vi.fn().mockResolvedValue('你是 Samantha，Her 内置的私人 AI 助手。'),
+    onWorkspaceChatEvent: vi.fn().mockImplementation((callback) => { emitWorkspace = callback; emit = event => { if (event.task) emitWorkspaceTask({ selectionVersion, event: event.task }); const { task: _, ...chat } = event; callback({ selectionVersion, event: chat }) }; return unsubscribe }),
     openExternal: vi.fn().mockResolvedValue(undefined)
   }
   window.her = bridge
@@ -126,6 +163,25 @@ afterEach(() => cleanup())
 async function openApp() {
   render(<App />)
   await screen.findByRole('textbox', { name: '消息' })
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: '一起在做的事' })))
+  const first = backendState.conversations[0]
+  if (first) await act(async () => fireEvent.click(screen.getByRole('button', { name: first.title })))
+  else await act(async () => fireEvent.click(screen.getAllByRole('button', { name: '另开一个话题' })[0]))
+  const modelDetails = screen.queryByText('模型与能力')?.closest('details')
+  if (modelDetails) modelDetails.open = true
+  return { unmount: cleanup }
+}
+
+async function openTopic(title: string) {
+  await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(await screen.findByRole('button', { name: title }))
+}
+
+async function trashTopic(title: string) {
+  if (screen.queryByRole('button', { name: '返回话题' })) await userEvent.click(screen.getByRole('button', { name: '返回话题' }))
+  const menu = screen.getByLabelText(`${title}的更多操作`).closest('details')!
+  await userEvent.click(screen.getByLabelText(`${title}的更多操作`))
+  await userEvent.click(within(menu).getByRole('button', { name: '移到回收站' }))
 }
 
 describe('conversation navigation and failure recovery', () => {
@@ -140,10 +196,9 @@ describe('conversation navigation and failure recovery', () => {
       { ...conversation, id: 'latest', title: '最近的对话', updatedAt: today.toISOString() }
     ]
     await openApp()
-    const recent = within(screen.getByRole('region', { name: '今天的对话' }))
-    expect(recent.getAllByRole('button').map(button => button.getAttribute('aria-label')).filter(name => name && !name.startsWith('删除对话'))).toEqual(['最近的对话', '上午的对话'])
-    expect(within(screen.getByRole('region', { name: '昨天的对话' })).getByRole('button', { name: '昨天的对话' })).toBeTruthy()
-    expect(within(screen.getByRole('region', { name: '更早的对话' })).getByRole('button', { name: '以前的对话' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    const list = within(screen.getByRole('region', { name: '一起在做的事' }))
+    for (const title of ['最近的对话', '上午的对话', '昨天的对话', '以前的对话']) expect(list.getByRole('button', { name: title })).toBeTruthy()
   })
 
   it('collapses date groups independently without changing the current conversation or draft', async () => {
@@ -156,20 +211,12 @@ describe('conversation navigation and failure recovery', () => {
     ]
     await openApp()
     await user.type(screen.getByRole('textbox', { name: '消息' }), '保留这段草稿')
-    const todayToggle = screen.getByRole('button', { name: '今天' })
-    await user.click(todayToggle)
-    expect(todayToggle.getAttribute('aria-expanded')).toBe('false')
-    expect(screen.queryByRole('button', { name: '当前对话' })).toBeNull()
-    expect(screen.getByRole('button', { name: '昨日记录' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '当前对话' })).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: '返回话题' }))
+    await user.click(screen.getByRole('button', { name: '昨日记录' }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('')
+    await user.click(screen.getByRole('button', { name: '返回话题' }))
+    await user.click(screen.getByRole('button', { name: '当前对话' }))
     expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('保留这段草稿')
-    await user.click(screen.getByRole('button', { name: '昨天' }))
-    expect(screen.queryByRole('button', { name: '昨日记录' })).toBeNull()
-    todayToggle.focus()
-    await user.keyboard('{Enter}')
-    expect(todayToggle.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getByRole('button', { name: '当前对话' }).getAttribute('aria-current')).toBe('page')
-    expect(screen.queryByRole('button', { name: '昨日记录' })).toBeNull()
   })
 
   it('restores sidebar width and collapsed groups after hiding without clearing the draft', async () => {
@@ -180,7 +227,6 @@ describe('conversation navigation and failure recovery', () => {
     separator.focus()
     await user.keyboard('{ArrowRight}')
     const width = separator.getAttribute('aria-valuenow')
-    await user.click(screen.getByRole('button', { name: '今天' }))
     await user.type(screen.getByRole('textbox', { name: '消息' }), '侧栏收起后继续写')
     await user.click(screen.getByRole('button', { name: '隐藏侧栏' }))
     expect(screen.queryByRole('complementary', { name: '会话侧栏' })).toBeNull()
@@ -189,7 +235,7 @@ describe('conversation navigation and failure recovery', () => {
     await user.click(screen.getByRole('button', { name: '显示侧栏' }))
     expect(screen.getByRole('complementary', { name: '会话侧栏' })).toBeTruthy()
     expect(screen.getByRole('separator').getAttribute('aria-valuenow')).toBe(width)
-    expect(screen.getByRole('button', { name: '今天' }).getAttribute('aria-expanded')).toBe('false')
+    expect(screen.getByRole('button', { name: '一起在做的事' })).toBeTruthy()
   })
 
   it('bounds sidebar keyboard resizing and clamps the width when the window gets narrower', async () => {
@@ -199,10 +245,10 @@ describe('conversation navigation and failure recovery', () => {
     try {
       await openApp()
       const separator = screen.getByRole('separator', { name: '调整侧栏宽度' })
-      expect(separator.getAttribute('aria-valuenow')).toBe('210')
+      expect(separator.getAttribute('aria-valuenow')).toBe('200')
       separator.focus()
       await user.keyboard('{ArrowRight}')
-      expect(separator.getAttribute('aria-valuenow')).toBe('226')
+      expect(separator.getAttribute('aria-valuenow')).toBe('216')
       await user.keyboard('{Home}{ArrowLeft}')
       expect(separator.getAttribute('aria-valuenow')).toBe('200')
       await user.keyboard('{End}{ArrowRight}')
@@ -223,7 +269,8 @@ describe('conversation navigation and failure recovery', () => {
       { ...conversation, id: 'plain', title: '普通摘要', lastMessage: '调用工具 get_current_time() 可以查看时间。' }
     ]
     await openApp()
-    const list = within(screen.getByRole('navigation', { name: '对话列表' }))
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    const list = within(screen.getByRole('region', { name: '一起在做的事' }))
     expect(within(list.getByRole('button', { name: '带工具的回复' })).getByText('现在晚上八点了。')).toBeTruthy()
     expect(within(list.getByRole('button', { name: '工具记录' })).getByText('工具调用记录')).toBeTruthy()
     expect(within(list.getByRole('button', { name: '普通摘要' })).getByText('调用工具 get_current_time() 可以查看时间。')).toBeTruthy()
@@ -237,10 +284,10 @@ describe('conversation navigation and failure recovery', () => {
     try {
       render(<App />)
       await act(async () => {})
-      expect(screen.getByRole('region', { name: '今天的对话' })).toBeTruthy()
+      await act(async () => fireEvent.click(screen.getByRole('button', { name: '一起在做的事' })))
+      expect(screen.getByRole('button', { name: conversation.title })).toBeTruthy()
       await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
-      expect(screen.queryByRole('region', { name: '今天的对话' })).toBeNull()
-      expect(within(screen.getByRole('region', { name: '昨天的对话' })).getByRole('button', { name: conversation.title })).toBeTruthy()
+      expect(screen.getByRole('button', { name: conversation.title })).toBeTruthy()
     } finally {
       cleanup()
       vi.useRealTimers()
@@ -440,7 +487,7 @@ describe('renderer bridge behavior', () => {
   it('persists a user-selected provider and desktop preferences through the bridge', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [profile, { ...profile, id: 'provider-2', name: 'Claude 服务', protocol: 'anthropic' }] }
+    backendState = { ...backendState, ...state, profiles: [profile, { ...profile, id: 'provider-2', name: 'Claude 服务', protocol: 'anthropic' }] }
     await openApp()
     await user.selectOptions(screen.getByLabelText('当前模型服务'), 'provider-2')
     await waitFor(() => expect(bridge.selectProfile).toHaveBeenCalledWith('provider-2'))
@@ -454,6 +501,29 @@ describe('renderer bridge behavior', () => {
     expect(screen.getByText('桌面偏好已保存')).toBeTruthy()
   })
 
+  it('saves appearance immediately without submitting other desktop preferences', async () => {
+    const user = userEvent.setup()
+    await openApp()
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('tab', { name: '桌面偏好' }))
+    await user.click(screen.getByRole('radio', { name: '深色' }))
+    await screen.findByText('外观已保存')
+    expect(bridge.setAppearance).toHaveBeenCalledWith('dark')
+    expect(bridge.setDesktopPreferences).not.toHaveBeenCalled()
+    expect((screen.getByRole('radio', { name: '深色' }) as HTMLInputElement).checked).toBe(true)
+  })
+
+  it('keeps the saved appearance when changing appearance fails', async () => {
+    const user = userEvent.setup()
+    vi.mocked(bridge.setAppearance).mockRejectedValueOnce(new Error('磁盘只读'))
+    await openApp()
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('tab', { name: '桌面偏好' }))
+    await user.click(screen.getByRole('radio', { name: '深色' }))
+    expect(await screen.findByText(/外观保存失败：磁盘只读/)).toBeTruthy()
+    expect((screen.getByRole('radio', { name: '浅色' }) as HTMLInputElement).checked).toBe(true)
+  })
+
   it('uses the safe external-link bridge and disposes the stream listener', async () => {
     const user = userEvent.setup()
     vi.mocked(bridge.getMessages).mockResolvedValue([{ ...assistantMessage, content: '[资料](https://example.com/docs)\n\n![远程图片说明](https://example.com/image.png)\n\n<script>unsafe()</script>', status: 'complete' }])
@@ -461,7 +531,7 @@ describe('renderer bridge behavior', () => {
     await user.click(await screen.findByRole('link', { name: '资料' }))
     expect(bridge.openExternal).toHaveBeenCalledWith('https://example.com/docs')
     expect(document.querySelector('script')).toBeNull()
-    expect(document.querySelector('img')).toBeNull()
+    expect(document.querySelector('.markdown img')).toBeNull()
     expect(screen.getByText('远程图片说明')).toBeTruthy()
     cleanup()
     expect(unsubscribe).toHaveBeenCalledTimes(1)
@@ -470,14 +540,17 @@ describe('renderer bridge behavior', () => {
   it('guides the first connection and clears transient credentials after saving the selected service', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [], conversations: [], settings: { ...state.settings, activeProfileId: null } }
-    await openApp()
-    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).disabled).toBe(true)
+    backendState = { ...backendState, ...state, profiles: [], conversations: [], settings: { ...state.settings, activeProfileId: null } }
+    render(<App />)
+    await screen.findByRole('textbox', { name: '消息' })
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
     await user.click(screen.getByRole('button', { name: '配置模型服务' }))
     await user.type(screen.getByLabelText('服务名称'), 'Claude')
     await user.selectOptions(screen.getByLabelText('协议'), 'anthropic')
     await user.type(screen.getByLabelText('Base URL'), 'https://example.com/proxy/v1')
     await user.type(screen.getByLabelText('Model ID'), 'claude-model')
+    fireEvent.change(screen.getByLabelText('上下文容量'), { target: { value: '200000' } })
     await user.type(screen.getByLabelText('API Key'), 'entered-test-key')
     await user.click(screen.getByText('高级选项'))
     fireEvent.change(screen.getByLabelText('额外请求头'), { target: { value: '{"X-Project":"her"}' } })
@@ -494,27 +567,28 @@ describe('renderer bridge behavior', () => {
     expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).disabled).toBe(false)
   })
 
-  it('shows the saved maximum output tokens only for Anthropic services', async () => {
+  it('shows the saved output limit across supported protocols', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [{ ...profile, protocol: 'anthropic', maxOutputTokens: 8192 }] }
+    backendState = { ...backendState, ...state, profiles: [{ ...profile, protocol: 'anthropic', maxOutputTokens: 8192 }] }
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     expect((screen.getByLabelText('最大输出 token 数') as HTMLInputElement).value).toBe('8192')
     await user.selectOptions(screen.getByLabelText('协议'), 'openai')
-    expect(screen.queryByLabelText('最大输出 token 数')).toBeNull()
+    expect(screen.getByLabelText('最大输出 token 数')).toBeTruthy()
   })
 
-  it('saves openai-responses protocol without maxOutputTokens and shows R monogram', async () => {
+  it('saves openai-responses protocol with an optional output limit and shows R monogram', async () => {
     const user = userEvent.setup()
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('button', { name: '添加服务' }))
     await user.type(screen.getByLabelText('服务名称'), '星火')
     await user.selectOptions(screen.getByLabelText('协议'), 'openai-responses')
-    expect(screen.queryByLabelText('最大输出 token 数')).toBeNull()
+    expect(screen.getByLabelText('最大输出 token 数')).toBeTruthy()
     await user.type(screen.getByLabelText('Base URL'), 'https://example.com/v1')
     await user.type(screen.getByLabelText('Model ID'), 'spark-model')
+    fireEvent.change(screen.getByLabelText('上下文容量'), { target: { value: '128000' } })
     await user.click(screen.getByRole('button', { name: '保存服务' }))
     await waitFor(() => expect(bridge.saveProfile).toHaveBeenCalledWith(expect.objectContaining({
       name: '星火', protocol: 'openai-responses', baseUrl: 'https://example.com/v1', model: 'spark-model',
@@ -529,7 +603,7 @@ describe('renderer bridge behavior', () => {
   it('saves an empty maximum output tokens as null and a typed value as a number', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [{ ...profile, protocol: 'anthropic' }] }
+    backendState = { ...backendState, ...state, profiles: [{ ...profile, protocol: 'anthropic' }] }
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     expect((screen.getByLabelText('最大输出 token 数') as HTMLInputElement).value).toBe('')
@@ -571,7 +645,7 @@ describe('renderer bridge behavior', () => {
     for (const protocol of ['openai', 'anthropic', 'openai-responses']) {
       await user.selectOptions(screen.getByLabelText('协议'), protocol)
       expect(screen.getByLabelText('1M 1')).toBeTruthy()
-      expect(!!screen.queryByLabelText('最大输出 token 数')).toBe(protocol === 'anthropic')
+      expect(screen.getByLabelText('最大输出 token 数')).toBeTruthy()
     }
     await user.click(screen.getByLabelText('1M 1'))
     await user.selectOptions(screen.getByLabelText('协议'), 'openai')
@@ -585,7 +659,7 @@ describe('renderer bridge behavior', () => {
   it('explains the 262144 default in the maximum output tokens field', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [{ ...profile, protocol: 'anthropic' }] }
+    backendState = { ...backendState, ...state, profiles: [{ ...profile, protocol: 'anthropic' }] }
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     expect((screen.getByLabelText('最大输出 token 数') as HTMLInputElement).placeholder).toBe('留空使用默认 262144')
@@ -596,7 +670,7 @@ describe('renderer bridge behavior', () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
     const second = { id: 'second-model', longOutput: false, multimodal: false, tests: structuredClone(profile.models[0].tests) }
-    backendState = { ...state, profiles: [{ ...profile, models: [...profile.models, second] }] }
+    backendState = { ...backendState, ...state, profiles: [{ ...profile, models: [...profile.models, second] }] }
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.selectOptions(screen.getByLabelText('测试模型'), 'second-model')
@@ -615,7 +689,7 @@ describe('renderer bridge behavior', () => {
 
     async function openWith(profiles: ProviderProfile[]) {
       const state = await bridge.getBootstrap()
-      backendState = { ...state, profiles: structuredClone(profiles) }
+      backendState = { ...backendState, ...state, profiles: structuredClone(profiles) }
       await openApp()
     }
     const modelPicker = () => screen.getByLabelText('当前模型') as HTMLSelectElement
@@ -633,14 +707,24 @@ describe('renderer bridge behavior', () => {
       expect(modelPicker().value).toBe('chat-model')
     })
 
+    it('keeps the conversation visible when the native model picker moves focus to the window', async () => {
+      await openWith([multi])
+      const blur = new FocusEvent('focusout', { bubbles: true })
+      Object.defineProperty(blur, 'relatedTarget', { value: window })
+      modelPicker().dispatchEvent(blur)
+      expect(screen.getByRole('heading', { name: '今天的事' })).toBeTruthy()
+      expect(modelPicker().closest('details')?.open).toBe(true)
+    })
+
     it('sends the chosen model, and the default when nothing was chosen', async () => {
       const user = userEvent.setup()
       await openWith([multi])
       await sendHello(user)
       expect(vi.mocked(bridge.sendMessage).mock.calls[0][0]).toMatchObject({ model: 'chat-model' })
-      emit({ requestId: vi.mocked(bridge.sendMessage).mock.calls[0][0].requestId, conversationId: conversation.id, message: { ...assistantMessage, status: 'complete' }, done: true })
+      await act(async () => emit({ requestId: vi.mocked(bridge.sendMessage).mock.calls[0][0].requestId, conversationId: conversation.id, message: { ...assistantMessage, status: 'complete' }, done: true }))
       await user.selectOptions(modelPicker(), 'other-model')
-      expect(screen.getByText(/other-model/, { selector: '.composer-hint' })).toBeTruthy()
+      expect(modelPicker().value).toBe('other-model')
+      expect(modelPicker().closest('details')?.className).toBe('model-details')
       await sendHello(user)
       await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledTimes(2))
       expect(vi.mocked(bridge.sendMessage).mock.calls[1][0]).toMatchObject({ model: 'other-model' })
@@ -650,7 +734,8 @@ describe('renderer bridge behavior', () => {
       const user = userEvent.setup()
       await openWith([multi])
       await user.selectOptions(modelPicker(), 'other-model')
-      await user.click(screen.getByRole('button', { name: '新对话' }))
+      await user.click(screen.getByRole('button', { name: '返回话题' }))
+      await user.click(screen.getByRole('button', { name: '另开一个话题' }))
       await waitFor(() => expect(modelPicker().value).toBe('chat-model'))
     })
 
@@ -707,6 +792,7 @@ describe('renderer bridge behavior', () => {
     expect(bridge.deleteProfile).toHaveBeenCalledWith(profile.id)
     await user.click(screen.getByRole('button', { name: '关闭设置' }))
     expect((screen.getByLabelText('当前模型服务') as HTMLSelectElement).value).toBe('')
+    await user.click(screen.getByRole('button', { name: '返回话题' }))
     expect(screen.getByRole('button', { name: conversation.title })).toBeTruthy()
   })
 
@@ -722,7 +808,6 @@ describe('renderer bridge behavior', () => {
     await act(async () => response.resolve({ userMessage, assistantMessage }))
     act(() => emit({ requestId: input.requestId, conversationId: conversation.id, message: { ...assistantMessage, content: '过时的半段' }, done: false }))
     expect(within(screen.getByLabelText('聊天消息')).getByText('完整回答')).toBeTruthy()
-    expect(within(screen.getByRole('button', { name: conversation.title })).getByText('完整回答')).toBeTruthy()
     expect(screen.queryByText('过时的半段')).toBeNull()
     expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
   })
@@ -740,12 +825,11 @@ describe('renderer bridge behavior', () => {
   it('replaces a new conversation placeholder with the first user message title', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, conversations: [] }
+    backendState = { ...backendState, ...state, conversations: [] }
     vi.mocked(bridge.sendMessage).mockResolvedValue({ userMessage: { ...userMessage, conversationId: 'conversation-2' }, assistantMessage: { ...assistantMessage, conversationId: 'conversation-2' } })
     await openApp()
     await user.type(screen.getByRole('textbox', { name: '消息' }), userMessage.content)
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(await screen.findByRole('button', { name: userMessage.content })).toBeTruthy()
     expect(screen.getByRole('heading', { name: userMessage.content })).toBeTruthy()
   })
 
@@ -758,6 +842,7 @@ describe('renderer bridge behavior', () => {
     await user.type(input, '  周报草稿{Enter}')
     await waitFor(() => expect(bridge.renameConversation).toHaveBeenCalledWith(conversation.id, '  周报草稿'))
     expect(await screen.findByRole('heading', { name: '周报草稿' })).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: '返回话题' }))
     expect(screen.getByRole('button', { name: '周报草稿' })).toBeTruthy()
     expect(screen.queryByLabelText('对话标题')).toBeNull()
   })
@@ -783,31 +868,31 @@ describe('renderer bridge behavior', () => {
     expect(screen.getByRole('heading', { name: conversation.title })).toBeTruthy()
   })
 
-  it('switches to the next conversation after deleting the current one', async () => {
+  it('returns to daily after deleting the current work conversation', async () => {
     const user = userEvent.setup()
     const other = { ...conversation, id: 'conversation-other', title: '另一段对话' }
     const state = await bridge.getBootstrap()
-    backendState = { ...state, conversations: [conversation, other] }
+    backendState = { ...backendState, ...state, conversations: [conversation, other] }
     await openApp()
-    await user.click(screen.getByRole('button', { name: `删除对话 ${conversation.title}` }))
+    await trashTopic(conversation.title)
     await waitFor(() => expect(bridge.trashConversation).toHaveBeenCalledWith(conversation.id))
-    expect(await screen.findByRole('heading', { name: '另一段对话' })).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '一起在做的事' })).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '另一段对话' })).toBeNull()
     expect(screen.queryByRole('button', { name: conversation.title })).toBeNull()
   })
 
   it('shows the welcome screen after deleting the only conversation', async () => {
     const user = userEvent.setup()
     await openApp()
-    await user.click(screen.getByRole('button', { name: `删除对话 ${conversation.title}` }))
-    expect(await screen.findByRole('heading', { name: '我在，慢慢说。' })).toBeTruthy()
-    expect(screen.getByRole('heading', { name: '新的开始' })).toBeTruthy()
+    await trashTopic(conversation.title)
+    expect(await screen.findByRole('heading', { name: '还没有一起在做的事' })).toBeTruthy()
   })
 
   it('keeps a generating conversation and shows why deleting it was refused', async () => {
     const user = userEvent.setup()
     vi.mocked(bridge.trashConversation).mockRejectedValueOnce(new Error('这段对话正在生成回答，请先停止。'))
     await openApp()
-    await user.click(screen.getByRole('button', { name: `删除对话 ${conversation.title}` }))
+    await trashTopic(conversation.title)
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', expect.stringContaining('请先停止'))
     expect(screen.getByRole('button', { name: conversation.title })).toBeTruthy()
   })
@@ -815,7 +900,7 @@ describe('renderer bridge behavior', () => {
   it('does not overwrite a custom title that equals the placeholder when the first message is sent', async () => {
     const user = userEvent.setup()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, conversations: [{ ...conversation, title: '新的对话' }] }
+    backendState = { ...backendState, ...state, conversations: [{ ...conversation, title: '新的对话' }] }
     await openApp()
     await user.click(screen.getByRole('button', { name: '重命名对话' }))
     await user.type(screen.getByLabelText('对话标题'), '{Enter}')
@@ -848,9 +933,10 @@ describe('renderer bridge behavior', () => {
       await user.click(await within(dialog).findByRole('button', { name: '恢复 旧对话' }))
       await waitFor(() => expect(bridge.restoreConversation).toHaveBeenCalledWith('trashed-1'))
       await waitFor(() => expect(within(dialog).queryByText('旧对话')).toBeNull())
-      const names = within(screen.getByRole('navigation', { name: '对话列表' })).getAllByRole('button')
-        .map((button) => button.getAttribute('aria-label')).filter((name) => name && !name.startsWith('删除对话'))
-      expect(names).toEqual(['旧对话', conversation.title])
+      await user.click(within(dialog).getByRole('button', { name: '关闭回收站' }))
+      await user.click(screen.getByRole('button', { name: '返回话题' }))
+      expect(screen.getByRole('button', { name: '旧对话' })).toBeTruthy()
+      expect(screen.getByRole('button', { name: conversation.title })).toBeTruthy()
     })
 
     it('asks for confirmation before permanently deleting and honours cancel', async () => {
@@ -864,7 +950,7 @@ describe('renderer bridge behavior', () => {
       await user.click(within(dialog).getByRole('button', { name: '确认永久删除' }))
       await waitFor(() => expect(bridge.purgeConversation).toHaveBeenCalledWith('trashed-1'))
       await waitFor(() => expect(within(dialog).queryByText('旧对话')).toBeNull())
-      expect(within(dialog).getByText('回收站是空的。')).toBeTruthy()
+      expect(within(dialog).getByText('回收站是空的')).toBeTruthy()
     })
 
     it('shows an error when the trash cannot be read', async () => {
@@ -943,7 +1029,7 @@ describe('renderer bridge behavior', () => {
       expect(bridge.purgeConversations).not.toHaveBeenCalled()
       await user.click(within(dialog).getByRole('button', { name: '确认清空' }))
       await waitFor(() => expect(bridge.purgeConversations).toHaveBeenCalledWith(['trashed-1', 'trashed-2']))
-      await waitFor(() => expect(within(dialog).getByText('回收站是空的。')).toBeTruthy())
+      await waitFor(() => expect(within(dialog).getByText('回收站是空的')).toBeTruthy())
     })
 
     it('offers clear-all until a conversation is selected, then delete-selected', async () => {
@@ -1022,7 +1108,8 @@ describe('renderer bridge behavior', () => {
     await act(async () => response.resolve({ status: 'untested', message: '配置已变化，请重新测试' }))
     await user.click(screen.getByRole('button', { name: '关闭设置' }))
     expect(screen.queryByRole('option', { name: profile.name })).toBeNull()
-    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('does not let a dismissed save acknowledgement replace a newer model', async () => {
@@ -1061,7 +1148,7 @@ describe('renderer bridge behavior', () => {
     await user.type(screen.getByLabelText('唤出快捷键'), 'CommandOrControl+Alt+B')
     await user.click(screen.getByRole('button', { name: '保存偏好' }))
     await screen.findByText('桌面偏好已保存')
-    await act(async () => response.resolve({ activeProfileId: profile.id, shortcut: 'CommandOrControl+Alt+A', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false }))
+    await act(async () => response.resolve({ activeProfileId: profile.id, shortcut: 'CommandOrControl+Alt+A', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false, appearance: 'light' }))
     await user.click(screen.getByRole('button', { name: '关闭设置' }))
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('tab', { name: '桌面偏好' }))
@@ -1072,7 +1159,7 @@ describe('renderer bridge behavior', () => {
     const user = userEvent.setup()
     const response = deferred<void>()
     const state = await bridge.getBootstrap()
-    backendState = { ...state, profiles: [profile, { ...profile, id: 'provider-2', name: '另一个服务' }], settings: { ...state.settings, activeProfileId: null } }
+    backendState = { ...backendState, ...state, profiles: [profile, { ...profile, id: 'provider-2', name: '另一个服务' }], settings: { ...state.settings, activeProfileId: null } }
     vi.mocked(bridge.selectProfile).mockImplementationOnce((id) => { backendState.settings.activeProfileId = id; return response.promise })
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
@@ -1152,12 +1239,15 @@ describe('renderer bridge behavior', () => {
     await waitFor(() => expect(bridge.saveProfile).toHaveBeenCalledWith(expect.objectContaining({ name: '当前草稿', apiKey: 'draft-test-key' })))
   })
 
-  it('renders system prompt tab and allows editing', async () => {
+  it('loads the default system prompt as editable text', async () => {
     const user = userEvent.setup()
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('tab', { name: /系统提示词/ }))
-    expect(screen.getByLabelText('系统提示词')).toBeDefined()
+    const textarea = screen.getByLabelText('系统提示词') as HTMLTextAreaElement
+    expect(textarea.value).toBe('你是 Samantha，Her 内置的私人 AI 助手。')
+    await user.type(textarea, '请简洁回答。')
+    expect(textarea.value).toBe('你是 Samantha，Her 内置的私人 AI 助手。请简洁回答。')
     expect(screen.getByRole('button', { name: '保存提示词' })).toBeDefined()
     expect(screen.getByRole('button', { name: '恢复默认' })).toBeDefined()
   })
@@ -1175,13 +1265,31 @@ describe('renderer bridge behavior', () => {
   })
 
   it('restores default system prompt', async () => {
+    vi.mocked(bridge.getSystemPrompt).mockResolvedValue('自定义提示词')
     const user = userEvent.setup()
     await openApp()
     await user.click(screen.getByRole('button', { name: '设置' }))
     await user.click(screen.getByRole('tab', { name: /系统提示词/ }))
-    await user.click(screen.getByRole('button', { name: '恢复默认' }))
     const textarea = screen.getByLabelText('系统提示词') as HTMLTextAreaElement
-    expect(textarea.value).toBe('')
+    expect(textarea.value).toBe('自定义提示词')
+    await user.click(screen.getByRole('button', { name: '恢复默认' }))
+    expect(textarea.value).toBe('你是 Samantha，Her 内置的私人 AI 助手。')
+    await user.click(screen.getByRole('button', { name: '保存提示词' }))
+    await waitFor(() => expect(bridge.setSystemPrompt).toHaveBeenCalledWith(''))
+  })
+
+  it('waits for both prompts before allowing edits and shows a load failure', async () => {
+    const response = deferred<string>()
+    vi.mocked(bridge.getDefaultSystemPrompt).mockReturnValue(response.promise)
+    const user = userEvent.setup()
+    await openApp()
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.click(screen.getByRole('tab', { name: /系统提示词/ }))
+    expect((screen.getByLabelText('系统提示词') as HTMLTextAreaElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: '保存提示词' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => response.reject(new Error('offline')))
+    expect(screen.getByText('系统提示词加载失败，请关闭设置后重试。')).toBeDefined()
+    expect((screen.getByRole('button', { name: '保存提示词' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('shows character count when typing system prompt', async () => {
@@ -1203,7 +1311,7 @@ import TaskStatus from '../src/renderer/src/TaskStatus'
 function taskEvent(status: TaskEvent['run']['status'] = 'awaiting_confirmation'): TaskEvent {
   return { requestId: 'task-request', conversationId: conversation.id,
     run: { id: 'run-1', requestId: 'task-request', conversationId: conversation.id, assistantMessageId: assistantMessage.id, status, providerId: profile.id, model: 'old-model', toolCallsCount: 1, activeMs: 1 },
-    ...(status === 'awaiting_confirmation' ? { approval: { id: 'approval-1', runId: 'run-1', callId: 'call-1', revision: 'rev-1', target: '目标窗口', summary: '发送这条消息' } } : {}) }
+    ...(status === 'awaiting_confirmation' ? { approval: { purpose: '执行请求', preview: { fields: [] }, dataClasses: [], scopeSummary: '本次', actionLabel: '确认', id: 'approval-1', runId: 'run-1', callId: 'call-1', revision: 'rev-1', target: '目标窗口', summary: '发送这条消息' } } : {}) }
 }
 const toolMessage: ChatMessage = { ...assistantMessage, content: '部分结果', toolCalls: [{ id: 'call-1', name: 'send', arguments: {}, status: 'awaiting_confirmation' }] }
 
@@ -1234,7 +1342,7 @@ it('keeps task approval, stop and continuation controls outside collapsed execut
   const view = render(<TaskStatus task={taskEvent()} message={toolMessage} canContinue={false} onContinue={resume} onStop={stop} />)
   const panel = screen.getByRole('region', { name: '任务状态' })
   expect(panel.querySelector('details')?.open).toBe(false)
-  const approve = screen.getByRole('button', { name: '允许这次操作' })
+  const approve = screen.getByRole('button', { name: '确认' })
   expect(approve.closest('details')).toBeNull()
   fireEvent.click(approve)
   await waitFor(() => expect(bridge.decideToolApproval).toHaveBeenCalledWith({ approvalId: 'approval-1', revision: 'rev-1', decision: 'approve' }))
@@ -1247,16 +1355,11 @@ it('keeps task approval, stop and continuation controls outside collapsed execut
   expect(resume).toHaveBeenCalledOnce()
 })
 
-it('offers conversation browser permission only when the Host allows it and supports revocation', async () => {
+it('obsolete conversation browser flags cannot offer a blanket permission', () => {
   const task = taskEvent()
   task.approval!.allowConversation = true
-  const view = render(<TaskStatus task={task} canContinue={false} onContinue={() => {}} onStop={() => {}} />)
-  fireEvent.click(screen.getByRole('button', { name: '本轮对话自动允许浏览器操作' }))
-  await waitFor(() => expect(bridge.decideToolApproval).toHaveBeenCalledWith({ approvalId: 'approval-1', revision: 'rev-1', decision: 'approve-conversation' }))
-  view.rerender(<TaskStatus task={{ ...taskEvent('completed'), browserAutoApproved: true }} canContinue={false} onContinue={() => {}} onStop={() => {}} />)
-  fireEvent.click(screen.getByRole('button', { name: '关闭浏览器自动操作' }))
-  await waitFor(() => expect(bridge.revokeConversationApprovals).toHaveBeenCalledWith(conversation.id))
-  await waitFor(() => expect(screen.queryByRole('button', { name: '关闭浏览器自动操作' })).toBeNull())
+  render(<TaskStatus task={{ ...task, browserAutoApproved: true }} canContinue={false} onContinue={() => {}} onStop={() => {}} />)
+  expect(screen.queryByRole('button', { name: /自动允许浏览器|关闭浏览器自动/ })).toBeNull()
 })
 
 it('reload hydrates live approval and stop identity; continuation retains trace and uses the currently selected model', async () => {
@@ -1264,9 +1367,9 @@ it('reload hydrates live approval and stop identity; continuation retains trace 
   backendState.profiles[0].models.push({ ...structuredClone(profile.models[0]), id: 'selected-model' })
   vi.mocked(bridge.getConversationTask).mockResolvedValue(task)
   vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
-  render(<App />)
+  await openApp()
   await screen.findByText('目标窗口', { exact: false })
-  fireEvent.click(screen.getByRole('button', { name: '允许这次操作' }))
+  fireEvent.click(screen.getByRole('button', { name: '确认' }))
   await waitFor(() => expect(bridge.decideToolApproval).toHaveBeenCalledWith({ approvalId: 'approval-1', revision: 'rev-1', decision: 'approve' }))
   fireEvent.click(screen.getByRole('button', { name: '停止任务' }))
   await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith('task-request'))
@@ -1281,18 +1384,18 @@ it('reload hydrates live approval and stop identity; continuation retains trace 
   expect(screen.getAllByText('部分结果').length).toBeGreaterThan(0)
 })
 
-it('a late query cannot replace a newer terminal task or move an approval into another conversation', async () => {
-  const late = deferred<TaskEvent | null>()
+it('a late snapshot cannot replace a newer terminal task or move an approval into another conversation', async () => {
   backendState.conversations.push({ ...conversation, id: 'conversation-2', title: '第二段' })
-  vi.mocked(bridge.getConversationTask).mockImplementation(id => id === conversation.id ? late.promise : Promise.resolve(null))
-  vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
-  render(<App />)
-  await screen.findByLabelText('消息')
-  act(() => emit({ requestId: 'task-request', conversationId: conversation.id, message: { ...toolMessage, status: 'cancelled' }, done: true, task: taskEvent('stopped') }))
-  await act(async () => late.resolve(taskEvent()))
-  expect(screen.queryByRole('button', { name: '允许这次操作' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: '第二段' }))
-  await waitFor(() => expect(bridge.getConversationTask).toHaveBeenCalledWith('conversation-2'))
+  await openApp()
+  const late = deferred<WorkspaceSnapshot>()
+  const oldVersion = selectionVersion + 1
+  vi.mocked(bridge.selectWorkspace).mockReturnValueOnce(late.promise)
+  fireEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getByRole('button', { name: '第二段' }))
+  await act(async () => late.resolve({ ...createdSnapshot(conversation.id), version: oldVersion, task: taskEvent() }))
+  expect(screen.getByRole('heading', { name: '第二段' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: '确认' })).toBeNull()
   expect(screen.queryByLabelText('任务状态')).toBeNull()
 })
 
@@ -1300,23 +1403,20 @@ const mcpA: McpServiceConfig = { id: 'mcp-a', name: 'A 服务', enabled: true, t
 async function openMcp() {
   vi.mocked(bridge.listMcpServices).mockResolvedValue([mcpA, { ...mcpA, id: 'mcp-b', name: 'B 服务' }])
   vi.mocked(bridge.getMcpStatus).mockImplementation(async id => ({ serviceId: id, revision: 1, state: 'ready', toolCount: 1 }))
-  render(<App />)
+  await openApp()
   fireEvent.click(await screen.findByRole('button', { name: '设置' }))
   fireEvent.click(await screen.findByRole('tab', { name: 'MCP 工具' }))
   await screen.findByDisplayValue('A 服务')
 }
 
-it('saves the all-conversation MCP permission and restores its checked state when reopening the service', async () => {
-  vi.mocked(bridge.saveMcpService).mockResolvedValue({ ...mcpA, revision: 2, allowAllOperations: true })
+it('removes the all-conversation permission and saves ordinary MCP edits without the retired field', async () => {
+  vi.mocked(bridge.saveMcpService).mockResolvedValue({ ...mcpA, revision: 2 })
   await openMcp()
-  const toggle = screen.getByRole('checkbox', { name: '所有对话允许此工具的所有操作' })
-  expect((toggle as HTMLInputElement).checked).toBe(false)
-  fireEvent.click(toggle)
+  expect(screen.queryByRole('checkbox', { name: '所有对话允许此工具的所有操作' })).toBeNull()
+  expect(screen.queryByText(/所有对话中自动执行|不再逐次确认|关闭此开关恢复确认/)).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: '保存 MCP 服务' }))
-  await waitFor(() => expect(bridge.saveMcpService).toHaveBeenCalledWith(expect.objectContaining({ id: 'mcp-a', expectedRevision: 1, allowAllOperations: true })))
-  await waitFor(() => expect((screen.getByRole('checkbox', { name: '所有对话允许此工具的所有操作' }) as HTMLInputElement).checked).toBe(true))
-  fireEvent.click(screen.getByRole('button', { name: /B 服务/ }))
-  expect((screen.getByRole('checkbox', { name: '所有对话允许此工具的所有操作' }) as HTMLInputElement).checked).toBe(false)
+  await waitFor(() => expect(bridge.saveMcpService).toHaveBeenCalledWith(expect.objectContaining({ id: 'mcp-a', expectedRevision: 1 })))
+  expect(vi.mocked(bridge.saveMcpService).mock.calls[0][0]).not.toHaveProperty('allowAllOperations')
 })
 
 it('keeps saved MCP configuration in focus while preset setup opens without clearing the draft', async () => {
@@ -1374,27 +1474,28 @@ it('preview ignores a late artifact from the previous conversation', async () =>
   expect(screen.queryByAltText('工具图片')).toBeNull()
 })
 
-it('a task query started before a new send cannot replace the newly admitted stop identity', async () => {
-  const stale = deferred<TaskEvent | null>()
+it('a snapshot started before a new send cannot replace the newly admitted stop identity', async () => {
+  await openApp()
+  const stale = deferred<WorkspaceSnapshot>()
+  const oldVersion = selectionVersion
   const sending = deferred<SendMessageResult>()
-  vi.mocked(bridge.getConversationTask).mockReturnValue(stale.promise)
+  vi.mocked(bridge.selectWorkspace).mockReturnValueOnce(stale.promise)
   vi.mocked(bridge.sendMessage).mockReturnValue(sending.promise)
-  render(<App />)
-  await screen.findByLabelText('消息')
-  await waitFor(() => expect(bridge.getMessages).toHaveBeenCalled())
+  fireEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
   fireEvent.change(screen.getByLabelText('消息'), { target: { value: 'new request' } })
   fireEvent.click(screen.getByRole('button', { name: '发送' }))
   await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledOnce())
   const input = vi.mocked(bridge.sendMessage).mock.calls[0][0]
-  await act(async () => stale.resolve(taskEvent()))
-  expect(screen.queryByRole('button', { name: '允许这次操作' })).toBeNull()
+  await act(async () => stale.resolve({ ...createdSnapshot(conversation.id), version: oldVersion, task: taskEvent() }))
+  expect(screen.queryByRole('button', { name: '确认' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: '停止生成' }))
   await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith(input.requestId))
 })
 
 it('offers the saved model vision probe and reports failed capabilities without changing the selected model', async () => {
   backendState.profiles[0].models[0].tests.vision = { status: 'failed', message: '无法识别' }
-  render(<App />)
+  await openApp()
   await screen.findByText(/视觉未通过/)
   fireEvent.click(screen.getByRole('button', { name: '设置' }))
   fireEvent.click(await screen.findByRole('button', { name: '测试视觉' }))
@@ -1403,35 +1504,38 @@ it('offers the saved model vision probe and reports failed capabilities without 
 })
 
 it('reload during connection preparation restores busy and stop even before a durable task exists', async () => {
-  backendState.activeRequest = { requestId: 'preparing', conversationId: conversation.id }
+  backendActiveRequest = { requestId: 'preparing', conversationId: conversation.id }
   vi.mocked(bridge.getConversationTask).mockResolvedValue(null)
-  vi.mocked(bridge.cancelMessage).mockImplementation(async () => { backendState.activeRequest = null; emitRequest({ requestId: 'preparing', conversationId: conversation.id, state: 'cancelled' }) })
-  render(<App />)
+  vi.mocked(bridge.sendMessage).mockResolvedValue({ userMessage, assistantMessage, queued: true })
+  vi.mocked(bridge.cancelMessage).mockImplementation(async () => { backendActiveRequest = null; emitRequest({ requestId: 'preparing', conversationId: conversation.id, state: 'cancelled' }) })
+  await openApp()
   const stop = await screen.findByRole('button', { name: '停止生成' })
   fireEvent.change(screen.getByLabelText('消息'), { target: { value: 'second request' } })
   fireEvent.keyDown(screen.getByLabelText('消息'), { key: 'Enter', code: 'Enter' })
-  expect(bridge.sendMessage).not.toHaveBeenCalled()
+  await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ content: 'second request' })))
   fireEvent.click(stop)
   await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith('preparing'))
   await screen.findByRole('button', { name: '发送' })
 })
 
-it('late bootstrap active identity cannot resurrect a task already stopped by a live event', async () => {
+it('late bootstrap cannot expose the active identity or approval from an unselected work topic', async () => {
   const boot = deferred<BootstrapState>()
-  backendState.activeRequest = { requestId: 'task-request', conversationId: conversation.id }
+  backendActiveRequest = { requestId: 'task-request', conversationId: conversation.id }
   vi.mocked(bridge.getBootstrap).mockReturnValueOnce(boot.promise)
   render(<App />)
   act(() => emit({ requestId: 'task-request', conversationId: conversation.id, message: { ...toolMessage, status: 'cancelled' }, done: true, task: taskEvent('stopped') }))
-  await act(async () => boot.resolve(structuredClone(backendState)))
+  const { conversations: _, ...state } = backendState
+  await act(async () => boot.resolve(structuredClone(state)))
   await screen.findByLabelText('消息')
   expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
-  expect(screen.queryByRole('button', { name: '允许这次操作' })).toBeNull()
+  expect(screen.queryByRole('button', { name: '确认' })).toBeNull()
+  expect(bridge.getConversationTask).not.toHaveBeenCalled()
 })
 
 
 it.each(['cancelled', 'failed'] as const)('a reloaded pre-run request clears busy on its %s lifecycle event without a stop click or refresh', async state => {
-  backendState.activeRequest = { requestId: 'preparing', conversationId: conversation.id }
-  render(<App />)
+  backendActiveRequest = { requestId: 'preparing', conversationId: conversation.id }
+  await openApp()
   await screen.findByRole('button', { name: '停止生成' })
   const reads = vi.mocked(bridge.getBootstrap).mock.calls.length
   act(() => emitRequest({ requestId: 'preparing', conversationId: conversation.id, state }))
@@ -1441,8 +1545,8 @@ it.each(['cancelled', 'failed'] as const)('a reloaded pre-run request clears bus
 })
 
 it('late lifecycle events from the old request cannot stop or replace a newer admitted request', async () => {
-  backendState.activeRequest = { requestId: 'old', conversationId: conversation.id }
-  render(<App />)
+  backendActiveRequest = { requestId: 'old', conversationId: conversation.id }
+  await openApp()
   await screen.findByRole('button', { name: '停止生成' })
   act(() => emitRequest({ requestId: 'old', conversationId: conversation.id, state: 'cancelled' }))
   await screen.findByRole('button', { name: '发送' })
@@ -1461,7 +1565,7 @@ it('a detached original send rejection cannot clear the next request after a ter
   const old = deferred<SendMessageResult>()
   const next = deferred<SendMessageResult>()
   vi.mocked(bridge.sendMessage).mockReturnValueOnce(old.promise).mockReturnValueOnce(next.promise)
-  render(<App />)
+  await openApp()
   await screen.findByLabelText('消息')
   await waitFor(() => expect(bridge.getMessages).toHaveBeenCalled())
   fireEvent.change(screen.getByLabelText('消息'), { target: { value: 'first' } })
@@ -1479,10 +1583,10 @@ it('a detached original send rejection cannot clear the next request after a ter
   await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith(nextId))
 })
 
-it('shows per-component preset diagnostics without discarding custom MCP drafts', async () => {
+it('grant_is_not_os_permission: missing system permission stays unready and preserves MCP draft', async () => {
   vi.mocked(bridge.listMcpPresets).mockResolvedValue([{ id: 'peekaboo', name: 'Mac 操作 · Peekaboo', defaultEnabled: true, executable: true, guidance: '原生 4.9.3 安装指引' }])
   vi.mocked(bridge.checkPresetDependencies).mockResolvedValue([{ component: 'Accessibility', status: 'permission_required', message: '请授予实际 Her 辅助功能权限' }])
-  render(<App />)
+  await openApp()
   await screen.findByRole('heading', { name: '今天的事' })
   fireEvent.click(screen.getByRole('button', { name: '设置' }))
   fireEvent.click(await screen.findByRole('tab', { name: 'MCP 工具' }))
@@ -1491,6 +1595,8 @@ it('shows per-component preset diagnostics without discarding custom MCP drafts'
   const checks = within(await screen.findByRole('list', { name: '预设依赖检查' }))
   expect(checks.getByText('Accessibility')).toBeTruthy()
   expect(checks.getByText('需授权')).toBeTruthy()
+  expect(screen.getByText(/能力待就绪/)).toBeTruthy()
+  expect(screen.getByText(/打开系统设置不代表已授权或委托已完成/)).toBeTruthy()
   expect((screen.getByLabelText('MCP 名称') as HTMLInputElement).value).toBe('未保存草稿')
   expect(bridge.createMcpPreset).not.toHaveBeenCalled()
 })
@@ -1499,13 +1605,37 @@ it('shows per-component preset diagnostics without discarding custom MCP drafts'
 const documentFile = { id: 'file-1', grantId: 'grant-1', name: 'notes.pdf', mimeType: 'application/pdf', size: 100, version: 'v1' }
 const documentGrant = { id: 'grant-1', kind: 'file' as const, scope: 'conversation' as const, conversationId: conversation.id, displayName: 'notes.pdf', revision: 1 }
 
+async function chooseFiles() {
+  await userEvent.click(await screen.findByText('文字与附件'))
+  await userEvent.click(screen.getByRole('button', { name: '添加资料' }))
+}
+
+async function openCurrentGrants() {
+  await userEvent.click(await screen.findByText('文字与附件'))
+  await userEvent.click(screen.getByRole('button', { name: '查看当前资料授权' }))
+}
+
+it('opens the composer file menu with real selection, directory and grant actions', async () => {
+  await openApp()
+  const trigger = await screen.findByText('文字与附件')
+  await userEvent.click(trigger)
+  expect(screen.getByRole('button', { name: '添加资料' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: '授权当前话题目录' })).toBeTruthy()
+  expect(screen.getByRole('button', { name: '授权长期目录' })).toBeTruthy()
+  await userEvent.click(screen.getByRole('button', { name: '授权当前话题目录' }))
+  expect(bridge.selectFiles).toHaveBeenCalledWith({ conversationId: conversation.id, kind: 'directory', scope: 'conversation' })
+  await userEvent.click(trigger)
+  await userEvent.click(screen.getByRole('button', { name: '查看当前资料授权' }))
+  expect(screen.getByRole('dialog', { name: '当前资料授权' })).toBeTruthy()
+  expect(screen.getByText('资料授权').closest('details')?.open).toBe(true)
+})
+
 it('attaches documents with text models and sends only IDs, preserving cancellation and retry draft', async () => {
-  render(<App />)
-  const add = await screen.findByRole('button', { name: '添加资料' })
-  await userEvent.click(add)
+  await openApp()
+  await chooseFiles()
   expect(screen.queryByText('notes.pdf')).toBeNull()
   vi.mocked(bridge.selectFiles).mockResolvedValueOnce({ grants: [documentGrant], files: [documentFile] })
-  await userEvent.click(add)
+  await chooseFiles()
   expect(await screen.findByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
   await userEvent.click(screen.getByRole('button', { name: '发送' }))
   await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalled())
@@ -1517,10 +1647,10 @@ it('discards native selection after A to B to A and after revoke', async () => {
   backendState.conversations.push({ ...conversation, id: 'b', title: '另一段' })
   const selecting = deferred<{ grants: typeof documentGrant[]; files: typeof documentFile[] }>()
   vi.mocked(bridge.selectFiles).mockReturnValueOnce(selecting.promise)
-  render(<App />)
-  await userEvent.click(await screen.findByRole('button', { name: '添加资料' }))
-  await userEvent.click(screen.getByRole('button', { name: '另一段' }))
-  await userEvent.click(screen.getByRole('button', { name: '今天的事' }))
+  await openApp()
+  await chooseFiles()
+  await openTopic('另一段')
+  await openTopic('今天的事')
   await act(async () => selecting.resolve({ grants: [documentGrant], files: [documentFile] }))
   expect(screen.queryByRole('button', { name: '移除 notes.pdf' })).toBeNull()
 })
@@ -1531,6 +1661,7 @@ it('settings lists persistent grants without a conversation and late diagnostics
   const checks = deferred<import('../src/shared/types').DependencyCheck[]>()
   vi.mocked(bridge.checkPresetDependencies).mockReturnValue(checks.promise)
   render(<App />)
+  await screen.findByRole('textbox', { name: '消息' })
   await userEvent.click(await screen.findByRole('button', { name: '设置' }))
   const name = screen.getByLabelText('服务名称'); await userEvent.clear(name); await userEvent.type(name, '未保存草稿')
   await userEvent.click(screen.getByRole('tab', { name: '资料授权' }))
@@ -1548,7 +1679,7 @@ it('projects document states and real physical pages without granting arbitrary 
     { id: 'pdf', name: 'read_pdf_pages', arguments: { fileId: 'file-1' }, status: 'succeeded', result: { content: [], fileSources: { fileIds: ['file-1'] }, structuredContent: { renderedPages: [3], failedPages: [{ pageNumber: 2, error: 'render failure' }], pages: [{ pageNumber: 3, width: 100, height: 100 }] } } },
     { id: 'external', name: 'mcp_fake', arguments: {}, result: { content: [], structuredContent: { source: { fileId: 'bad', name: 'fake-source' } } } }
   ] }])
-  render(<App />)
+  await openApp()
   expect(await screen.findByText('部分提取')).toBeTruthy()
   expect(screen.getByText('真实片段')).toBeTruthy()
   expect(screen.getByText(/物理第 3 页/)).toBeTruthy()
@@ -1561,9 +1692,9 @@ it('projects document states and real physical pages without granting arbitrary 
 it('creates an owned conversation for attachment selection without erasing typed text', async () => {
   backendState.conversations = []
   vi.mocked(bridge.selectFiles).mockResolvedValue({ grants: [documentGrant], files: [documentFile] })
-  render(<App />)
+  await openApp()
   await userEvent.type(await screen.findByRole('textbox', { name: '消息' }), '保留这段草稿')
-  await userEvent.click(screen.getByRole('button', { name: '添加资料' }))
+  await chooseFiles()
   expect(await screen.findByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
   expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('保留这段草稿')
   expect(bridge.selectFiles).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conversation-2' }))
@@ -1575,11 +1706,11 @@ it('drop and grant-list completions cannot cross A to B to A', async () => {
   const listing = deferred<typeof documentGrant[]>()
   vi.mocked(bridge.addDroppedFiles).mockReturnValue(dropped.promise)
   vi.mocked(bridge.listFileGrants).mockReturnValueOnce(listing.promise)
-  render(<App />)
-  await screen.findByRole('button', { name: '添加资料' })
+  await openApp()
+  await screen.findByText('文字与附件')
   fireEvent.drop(document.querySelector('.composer-area')!, { dataTransfer: { files: [new File(['hello'], 'notes.pdf')], types: ['Files'] } })
-  await userEvent.click(screen.getByRole('button', { name: '另一段' }))
-  await userEvent.click(screen.getByRole('button', { name: '今天的事' }))
+  await openTopic('另一段')
+  await openTopic('今天的事')
   await act(async () => { dropped.resolve([documentFile]); listing.resolve([documentGrant]) })
   expect(screen.queryByRole('button', { name: '移除 notes.pdf' })).toBeNull()
   expect(screen.queryByRole('button', { name: '撤销 notes.pdf' })).toBeNull()
@@ -1592,13 +1723,13 @@ it('revocation discards late selection and image previews while retaining visibl
   vi.mocked(bridge.listFileGrants).mockResolvedValue([documentGrant])
   vi.mocked(bridge.selectFiles).mockResolvedValueOnce({ grants: [documentGrant], files: [image] })
   vi.mocked(bridge.getMessages).mockResolvedValue([{ ...userMessage, files: [image] }])
-  render(<App />)
-  await userEvent.click(await screen.findByRole('button', { name: '添加资料' }))
+  await openApp()
+  await chooseFiles()
   await screen.findByRole('button', { name: '移除 picture.png' })
   const selection = deferred<{ grants: typeof documentGrant[]; files: typeof documentFile[] }>()
   vi.mocked(bridge.selectFiles).mockReturnValueOnce(selection.promise)
-  await userEvent.click(screen.getByRole('button', { name: '添加资料' }))
-  await userEvent.click(screen.getByText('资料授权 · 1'))
+  await chooseFiles()
+  await openCurrentGrants()
   vi.mocked(bridge.listFileGrants).mockResolvedValue([])
   await userEvent.click(screen.getByRole('button', { name: '撤销 notes.pdf' }))
   await act(async () => { preview.resolve({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,late' }); selection.resolve({ grants: [documentGrant], files: [image] }) })
@@ -1611,7 +1742,7 @@ it('revocation discards late selection and image previews while retaining visibl
 it('selected image preview survives sending as a reference without inline persisted bytes', async () => {
   const image = { ...documentFile, name: 'picture.png', mimeType: 'image/png' }
   vi.mocked(bridge.getMessages).mockResolvedValue([{ ...userMessage, files: [image] }])
-  render(<App />)
+  await openApp()
   expect(await screen.findByAltText('picture.png')).toBeTruthy()
 })
 
@@ -1621,7 +1752,7 @@ it('projects pending, failed and empty document results without inventing pages'
     { id: 'failed', name: 'read_document', arguments: { fileId: 'f' }, status: 'failed', result: { isError: true, content: [{ type: 'text', text: '提取失败' }] } },
     { id: 'empty', name: 'read_document', arguments: { fileId: 'e' }, status: 'succeeded', result: { content: [], fileSources: { fileIds: ['e'] }, structuredContent: { documentId: 'e', status: 'empty', text: '', source: { fileId: 'e', name: 'empty.pdf' }, range: { offset: 0, length: 0 }, truncated: false } } }
   ] }])
-  render(<App />)
+  await openApp()
   expect(await screen.findByText('正在读取…')).toBeTruthy()
   expect(screen.getByText('读取失败')).toBeTruthy()
   expect(screen.getByText('未提取到文字')).toBeTruthy()
@@ -1630,9 +1761,9 @@ it('projects pending, failed and empty document results without inventing pages'
 
 it('late parser results in another conversation never appear in the current conversation', async () => {
   backendState.conversations.push({ ...conversation, id: 'b', title: '另一段' })
-  render(<App />)
-  await screen.findByRole('button', { name: '添加资料' })
-  await userEvent.click(screen.getByRole('button', { name: '另一段' }))
+  await openApp()
+  await screen.findByText('文字与附件')
+  await openTopic('另一段')
   await act(async () => emit({ requestId: 'old-parse', conversationId: conversation.id, done: true, message: { ...assistantMessage, content: '', status: 'complete', toolCalls: [{ id: 'r', name: 'read_document', arguments: { fileId: 'f' }, status: 'succeeded', result: { content: [], fileSources: { fileIds: ['f'] }, structuredContent: { text: '迟到的资料片段', status: 'ready', source: { fileId: 'f', name: 'old.pdf' } } } }] } }))
   expect(screen.queryByText('迟到的资料片段')).toBeNull()
 })
@@ -1640,12 +1771,12 @@ it('late parser results in another conversation never appear in the current conv
 it('unmount drops pending file preview and picker results', async () => {
   const selection = deferred<{ grants: typeof documentGrant[]; files: typeof documentFile[] }>()
   vi.mocked(bridge.selectFiles).mockReturnValueOnce(selection.promise)
-  const view = render(<App />)
-  await userEvent.click(await screen.findByRole('button', { name: '添加资料' }))
+  const view = await openApp()
+  await chooseFiles()
   view.unmount()
   await act(async () => selection.resolve({ grants: [documentGrant], files: [documentFile] }))
-  render(<App />)
-  await screen.findByRole('button', { name: '添加资料' })
+  await openApp()
+  await screen.findByText('文字与附件')
   expect(screen.queryByRole('button', { name: '移除 notes.pdf' })).toBeNull()
 })
 
@@ -1656,10 +1787,10 @@ it('revocation immediately invalidates pending PDF artifact previews before the 
   vi.mocked(bridge.getArtifactPreview).mockReturnValueOnce(preview.promise)
   vi.mocked(bridge.revokeFileGrant).mockReturnValueOnce(revoking.promise)
   vi.mocked(bridge.getMessages).mockResolvedValue([{ ...assistantMessage, status: 'complete', toolCalls: [{ id: 'pdf', name: 'read_pdf_pages', arguments: { fileId: 'file-1' }, status: 'succeeded', result: { content: [{ type: 'image', artifactId: 'page', mimeType: 'image/png' }], fileSources: { fileIds: ['file-1'] } } }] }])
-  render(<App />)
+  await openApp()
   await userEvent.click(await screen.findByText('工具记录：1 个步骤'))
   await userEvent.click(screen.getByRole('button', { name: '查看工具图片' }))
-  await userEvent.click(screen.getByText('资料授权 · 1'))
+  await openCurrentGrants()
   await userEvent.click(screen.getByRole('button', { name: '撤销 notes.pdf' }))
   await act(async () => preview.resolve({ mimeType: 'image/png', dataUrl: 'data:image/png;base64,old' }))
   expect(screen.queryByAltText('工具图片')).toBeNull()
@@ -1671,9 +1802,9 @@ it('a failed revoke does not claim that historical source authorization was revo
   vi.mocked(bridge.listFileGrants).mockResolvedValue([documentGrant])
   vi.mocked(bridge.revokeFileGrant).mockRejectedValueOnce(new Error('撤销未完成，请重试'))
   vi.mocked(bridge.getMessages).mockResolvedValue([{ ...userMessage, files: [documentFile] }])
-  render(<App />)
+  await openApp()
   await screen.findByRole('button', { name: '打开来源 notes.pdf' })
-  await userEvent.click(screen.getByText('资料授权 · 1'))
+  await openCurrentGrants()
   await userEvent.click(screen.getByRole('button', { name: '撤销 notes.pdf' }))
   expect(await screen.findByText('撤销未完成，请重试')).toBeTruthy()
   expect(screen.queryByText(/授权已撤销，历史保留/)).toBeNull()
@@ -1683,9 +1814,9 @@ it('a failed revoke does not claim that historical source authorization was revo
 it('a late historical parse result after revoke is labelled unavailable instead of ready for reading', async () => {
   vi.mocked(bridge.listFileGrants).mockResolvedValue([documentGrant])
   vi.mocked(bridge.getMessages).mockResolvedValue([{ ...userMessage, files: [documentFile] }])
-  render(<App />)
+  await openApp()
   await screen.findByRole('button', { name: '打开来源 notes.pdf' })
-  await userEvent.click(screen.getByText('资料授权 · 1'))
+  await openCurrentGrants()
   vi.mocked(bridge.listFileGrants).mockResolvedValue([])
   await userEvent.click(screen.getByRole('button', { name: '撤销 notes.pdf' }))
   await act(async () => emit({ requestId: 'late-read', conversationId: conversation.id, done: true, message: { ...assistantMessage, status: 'complete', toolCalls: [{ id: 'doc', name: 'read_document', arguments: { fileId: 'file-1' }, status: 'succeeded', result: { content: [], fileSources: { fileIds: ['file-1'] }, structuredContent: { status: 'ready', text: '历史片段', source: { fileId: 'file-1', name: 'notes.pdf' }, range: { offset: 0, length: 4 } } } }] } }))
@@ -1696,7 +1827,7 @@ it('a late historical parse result after revoke is labelled unavailable instead 
 it('first send rejection restores the original text in its newly owned conversation', async () => {
   backendState.conversations = []
   vi.mocked(bridge.sendMessage).mockRejectedValueOnce(new Error('模型不可用'))
-  render(<App />)
+  await openApp()
   const input = await screen.findByRole('textbox', { name: '消息' })
   await userEvent.type(input, '首次发送的原文')
   await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -1710,11 +1841,11 @@ it.each(['pending', 'completed'])('send rejection restores text during a new %s 
   const selection = deferred<{ grants: typeof documentGrant[]; files: typeof documentFile[] }>()
   vi.mocked(bridge.sendMessage).mockReturnValueOnce(response.promise)
   vi.mocked(bridge.selectFiles).mockResolvedValueOnce({ grants: [documentGrant], files: [documentFile] }).mockReturnValueOnce(selection.promise)
-  render(<App />)
-  await userEvent.click(await screen.findByRole('button', { name: '添加资料' }))
+  await openApp()
+  await chooseFiles()
   await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '待恢复原文')
   await userEvent.click(screen.getByRole('button', { name: '发送' }))
-  await userEvent.click(screen.getByRole('button', { name: '添加资料' }))
+  await chooseFiles()
   if (phase === 'completed') await act(async () => selection.resolve({ grants: [], files: [{ ...documentFile, id: 'new-file', name: 'new.pdf' }] }))
   await act(async () => response.reject(new Error('未提交')))
   expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('待恢复原文')
@@ -1724,26 +1855,26 @@ it.each(['pending', 'completed'])('send rejection restores text during a new %s 
   expect(screen.queryByRole('button', { name: '移除 notes.pdf' })).toBeNull()
 })
 
-it('send rejection never restores old text or files after A to B to A', async () => {
+it('send rejection restores its own text and files after A to B to A', async () => {
   backendState.conversations.push({ ...conversation, id: 'b', title: '另一段' })
   const response = deferred<SendMessageResult>()
   vi.mocked(bridge.sendMessage).mockReturnValueOnce(response.promise)
   vi.mocked(bridge.selectFiles).mockResolvedValueOnce({ grants: [documentGrant], files: [documentFile] })
-  render(<App />)
-  await userEvent.click(await screen.findByRole('button', { name: '添加资料' }))
+  await openApp()
+  await chooseFiles()
   await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '旧草稿')
   await userEvent.click(screen.getByRole('button', { name: '发送' }))
-  await userEvent.click(screen.getByRole('button', { name: '另一段' }))
-  await userEvent.click(screen.getByRole('button', { name: '今天的事' }))
+  await openTopic('另一段')
+  await openTopic('今天的事')
   await act(async () => response.reject(new Error('未提交')))
-  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('')
-  expect(screen.queryByRole('button', { name: '移除 notes.pdf' })).toBeNull()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('旧草稿')
+  expect(screen.getByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
 })
 
 it.each(['新的草稿', ''])('send rejection preserves newer user text edits including intentional empty text: %s', async newer => {
   const response = deferred<SendMessageResult>()
   vi.mocked(bridge.sendMessage).mockReturnValueOnce(response.promise)
-  render(<App />)
+  await openApp()
   const input = await screen.findByRole('textbox', { name: '消息' })
   await userEvent.type(input, '旧草稿')
   await userEvent.click(screen.getByRole('button', { name: '发送' }))
@@ -1753,37 +1884,35 @@ it.each(['新的草稿', ''])('send rejection preserves newer user text edits in
   expect((input as HTMLTextAreaElement).value).toBe(newer)
 })
 
-it('send-owned delayed creation preserves text edited while the conversation is being created', async () => {
+it('a delayed topic creation preserves the daily draft', async () => {
   backendState.conversations = []
-  const creation = deferred<typeof conversation>()
+  const creation = deferred<WorkspaceSnapshot>()
   vi.mocked(bridge.createConversation).mockReturnValueOnce(creation.promise)
-  vi.mocked(bridge.sendMessage).mockRejectedValueOnce(new Error('未提交'))
   render(<App />)
   const input = await screen.findByRole('textbox', { name: '消息' })
-  await userEvent.type(input, '原文')
-  await userEvent.click(screen.getByRole('button', { name: '发送' }))
-  await userEvent.clear(input); await userEvent.type(input, '创建期间的新草稿')
-  await act(async () => creation.resolve({ ...conversation, id: 'created' }))
-  await screen.findByText(/发送失败：未提交/)
-  expect((input as HTMLTextAreaElement).value).toBe('创建期间的新草稿')
+  await userEvent.type(input, '日常里的草稿')
+  await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getAllByRole('button', { name: '另开一个话题' })[0])
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await act(async () => creation.resolve(createdSnapshot('created')))
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('日常里的草稿')
+  expect(bridge.sendMessage).not.toHaveBeenCalled()
 })
 
 
-it('send-owned creation cannot reclaim the view after the user opens another conversation', async () => {
-  backendState.conversations = []
-  const creation = deferred<typeof conversation>()
-  vi.mocked(bridge.createConversation).mockReturnValueOnce(creation.promise).mockResolvedValueOnce({ ...conversation, id: 'user-new', title: '用户新对话' })
+it('delayed topic creation cannot reclaim a newer topic view', async () => {
+  const creation = deferred<WorkspaceSnapshot>()
+  vi.mocked(bridge.createConversation).mockReturnValueOnce(creation.promise)
   render(<App />)
-  const input = await screen.findByRole('textbox', { name: '消息' })
-  await userEvent.type(input, '旧请求')
-  await userEvent.click(screen.getByRole('button', { name: '发送' }))
-  await userEvent.click(screen.getByRole('button', { name: '新对话' }))
-  await screen.findByRole('heading', { name: '用户新对话' })
-  await userEvent.type(input, '新视图草稿')
-  await act(async () => creation.resolve({ ...conversation, id: 'late-created' }))
+  await userEvent.click(await screen.findByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getByRole('button', { name: '另开一个话题' }))
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await openTopic(conversation.title)
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '新视图草稿')
+  await act(async () => creation.resolve(createdSnapshot('late-created')))
   expect(bridge.sendMessage).not.toHaveBeenCalled()
-  expect((input as HTMLTextAreaElement).value).toBe('新视图草稿')
-  expect(screen.getByRole('heading', { name: '用户新对话' })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('新视图草稿')
+  expect(screen.getByRole('heading', { name: conversation.title })).toBeTruthy()
 })
 
 describe('queue and task indicators', () => {
@@ -1795,7 +1924,7 @@ describe('queue and task indicators', () => {
     vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ running: true, items: [
       { requestId: 'q1', userMessageId: 'u1', preview: '第一条排队的话', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' },
       { requestId: 'q2', userMessageId: 'u2', preview: '第二条排队的话', profileId: null, model: null, createdAt: '2026-10-20T08:01:00.000Z' }] }))
-    render(<App />)
+    await openApp()
     const region = await screen.findByRole('status', { name: '排队中的消息' })
     const previews = [...region.querySelectorAll('.queued-preview')].map(node => node.textContent)
     expect(previews).toEqual(['第一条排队的话', '第二条排队的话'])
@@ -1805,7 +1934,7 @@ describe('queue and task indicators', () => {
     vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
     vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ paused: 'compaction-failed', items: [
       { requestId: 'q1', userMessageId: 'u1', preview: '等着', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' }] }))
-    render(<App />)
+    await openApp()
     expect(await screen.findByText('压缩失败')).toBeTruthy()
   })
 
@@ -1813,31 +1942,922 @@ describe('queue and task indicators', () => {
     vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
     vi.mocked(bridge.getQueue).mockResolvedValue(queueState({ compacting: true, items: [
       { requestId: 'q1', userMessageId: 'u1', preview: '等着', profileId: null, model: null, createdAt: '2026-10-20T08:00:00.000Z' }] }))
-    render(<App />)
+    await openApp()
+    await userEvent.click(await screen.findByLabelText('查看 token 用量与上下文'))
     expect(await screen.findByText('正在压缩上下文…')).toBeTruthy()
   })
 
   it('shows nothing extra when nothing is queued', async () => {
     vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, assistantMessage])
-    render(<App />)
+    await openApp()
     await waitFor(() => expect(bridge.getQueue).toHaveBeenCalledWith(conversation.id))
     await screen.findByLabelText('聊天消息')
     expect(screen.queryByRole('status', { name: '排队中的消息' })).toBeNull()
   })
 
-  it('marks a conversation whose task is waiting for approval in the sidebar', async () => {
+  it('shows a waiting approval in its conversation', async () => {
     vi.mocked(bridge.getConversationTask).mockResolvedValue(taskEvent())
     vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
-    render(<App />)
-    const indicator = await screen.findByLabelText('等待确认')
-    expect(indicator.className).toContain('awaiting_confirmation')
+    await openApp()
+    expect(await screen.findByRole('button', { name: '确认' })).toBeTruthy()
   })
 
   it('does not mark a finished task in the sidebar', async () => {
     vi.mocked(bridge.getConversationTask).mockResolvedValue(taskEvent('stopped'))
     vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, toolMessage])
-    render(<App />)
+    await openApp()
     await screen.findByText('已停止', { exact: false })
     expect(document.querySelector('.task-indicator')).toBeNull()
   })
+})
+
+describe('token usage display', () => {
+  it.each([null, 11])('keeps token counts out of the answer bubble', async input => {
+    bridge.getMessages = vi.fn().mockResolvedValue([userMessage, { ...assistantMessage, content: 'done', status: 'complete', usage: { input, output: input === null ? null : 5 } }])
+    await openApp()
+    await screen.findByText('done')
+    expect(document.querySelector('.message-usage')).toBeNull()
+    expect(screen.queryByText(input === null ? '用量未知' : '输入 11 / 输出 5 token')).toBeNull()
+  })
+})
+
+describe('explicit model source and authentication', () => {
+  it('keeps authentication mode when renaming a saved service', async () => {
+    const user = userEvent.setup(); await openApp()
+    await user.click(screen.getByRole('button', { name: '设置' }))
+    expect((screen.getByLabelText('认证方式') as HTMLSelectElement).value).toBe('api-key')
+    await user.click(screen.getByRole('button', { name: '保存服务' }))
+    await waitFor(() => expect(bridge.saveProfile).toHaveBeenCalledWith(expect.objectContaining({ authMethod: 'api-key' })))
+  })
+
+  it('shows catalog capacity and image capability and saves the selected catalog provider', async () => {
+    const user = userEvent.setup()
+    bridge.listModelCatalog = vi.fn().mockResolvedValue([{ provider: 'anthropic', id: 'catalog-model', name: '目录模型', protocol: 'anthropic', baseUrl: 'https://api.anthropic.com', contextWindow: 200000, maxOutputTokens: 64000, multimodal: true }])
+    await openApp(); await user.click(screen.getByRole('button', { name: '设置' }))
+    await user.selectOptions(screen.getByLabelText('模型来源'), 'catalog')
+    await user.selectOptions(await screen.findByLabelText('Pi 目录模型'), 'anthropic/catalog-model')
+    expect((screen.getByLabelText('上下文容量') as HTMLInputElement).value).toBe('200000')
+    expect(screen.getByText(/支持图片.*工具能力/)).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: '保存服务' }))
+    await waitFor(() => expect(bridge.saveProfile).toHaveBeenCalledWith(expect.objectContaining({ catalogProvider: 'anthropic', model: 'catalog-model', maxOutputTokens: 64000 })))
+  })
+})
+
+describe('ordered runtime events', () => {
+  it('discards an older sequence without overwriting a newer answer', async () => {
+    await openApp()
+    await act(async () => emit({ conversationId: conversation.id, requestId: 'ordered', runId: 'run-ordered', generation: 0, seq: 10, message: { ...assistantMessage, content: 'newest' }, done: false }))
+    await within(screen.getByLabelText('聊天消息')).findByText('newest')
+    await act(async () => emit({ conversationId: conversation.id, requestId: 'ordered', runId: 'run-ordered', generation: 0, seq: 9, message: { ...assistantMessage, content: 'stale' }, done: false }))
+    expect(screen.queryByText('stale')).toBeNull()
+    expect(within(screen.getByLabelText('聊天消息')).getByText('newest')).toBeTruthy()
+  })
+})
+
+describe('conversation runtime controls', () => {
+  it('lets a second conversation send while the first is running', async () => {
+    backendState.conversations.push({ ...conversation, id: 'second', title: '另一段' })
+    backendActiveRequest = { conversationId: conversation.id, requestId: 'background' }
+    const user = userEvent.setup(); await openApp()
+    await openTopic('另一段')
+    await user.type(screen.getByRole('textbox', { name: '消息' }), 'parallel{Enter}')
+    await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'second', content: 'parallel' })))
+  })
+
+  it('offers withdrawal and explicit resume for paused queued messages', async () => {
+    vi.mocked(bridge.getQueue).mockResolvedValue({ conversationId: conversation.id, items: [{ requestId: 'queued', userMessageId: 'queued-user', preview: 'waiting', profileId: profile.id, model: profile.model, createdAt: conversation.createdAt }], paused: 'stopped', running: false, compacting: false })
+    const user = userEvent.setup(); await openApp()
+    await user.click(await screen.findByRole('button', { name: '撤销排队消息 waiting' }))
+    expect(bridge.cancelQueuedMessage).toHaveBeenCalledWith(conversation.id, 'queued')
+    await user.click(screen.getByRole('button', { name: '继续队列' }))
+    expect(bridge.resumeQueue).toHaveBeenCalledWith(conversation.id)
+  })
+
+  it('offers manual compaction and a stop entry even with no queued messages', async () => {
+    const user = userEvent.setup(); await openApp()
+    await user.click(await screen.findByLabelText('查看 token 用量与上下文'))
+    await user.click(await screen.findByRole('button', { name: '压缩上下文' }))
+    expect(bridge.compactConversation).toHaveBeenCalledWith(expect.objectContaining({ conversationId: conversation.id, profileId: profile.id }))
+    vi.mocked(bridge.getQueue).mockResolvedValue({ conversationId: conversation.id, items: [], paused: null, running: false, compacting: true })
+    await act(async () => emitRequest({ requestId: 'tick', conversationId: conversation.id, state: 'started' }))
+    await user.click(await screen.findByRole('button', { name: '停止压缩' }))
+    expect(bridge.stopCompaction).toHaveBeenCalledWith(conversation.id)
+  })
+})
+
+describe('durable cleanup retry', () => {
+  it('shows failed cleanup after reopening the trash and retries without offering restore', async () => {
+    trashedState = [{ ...conversation, deletedAt: conversation.updatedAt, cleanupPending: true, cleanupError: '清理未完成，请重试。' }]
+    const user = userEvent.setup(); await openApp()
+    await user.click(screen.getByRole('button', { name: '回收站' }))
+    await screen.findByText('清理未完成，请重试。')
+    expect(screen.queryByRole('button', { name: `恢复 ${conversation.title}` })).toBeNull()
+    await user.click(screen.getByRole('button', { name: `重试清理 ${conversation.title}` }))
+    await waitFor(() => expect(bridge.purgeConversation).toHaveBeenCalledWith(conversation.id))
+    await screen.findByText('回收站是空的')
+  })
+})
+
+describe('composer token and context controls', () => {
+  it('shows only the context ring until opened, with all usage and compaction inside the panel', async () => {
+    bridge.getConversationContext = vi.fn().mockResolvedValue({ tokens: 225000, contextWindow: 475000 })
+    vi.mocked(bridge.getMessages).mockResolvedValue([
+      { ...assistantMessage, status: 'complete', id: 'first-usage', usage: { input: 3406, output: 137 } },
+      { ...assistantMessage, status: 'complete', id: 'last-usage', usage: { input: 7165, output: 101 } }
+    ])
+    const user = userEvent.setup(); await openApp()
+    const controls = await screen.findByRole('group', { name: 'Token 用量与上下文' })
+    const summary = within(controls).getByLabelText('查看 token 用量与上下文')
+    await within(summary).findByText('47%')
+    expect(summary.textContent).toBe('47%')
+    expect((summary.closest('details') as HTMLDetailsElement).open).toBe(false)
+    expect(within(controls).getByRole('button', { name: '压缩上下文' }).closest('details')).toBe(summary.closest('details'))
+    await user.click(summary)
+    expect(within(controls).getByRole('button', { name: '压缩上下文' })).toBeTruthy()
+    expect(within(controls).getByText('7,165')).toBeTruthy()
+    expect(within(controls).getByText('10,809')).toBeTruthy()
+    expect(within(controls).getByText('225,000 / 475,000')).toBeTruthy()
+  })
+})
+
+it('marks a partial conversation total honestly and does not substitute zero for unknown context', async () => {
+  vi.mocked(bridge.getMessages).mockResolvedValue([
+    { ...assistantMessage, id: 'known', status: 'complete', usage: { input: 1000, output: 200 } },
+    { ...assistantMessage, id: 'unknown', status: 'complete', usage: { input: null, output: null } }
+  ])
+  const user = userEvent.setup(); await openApp()
+  const controls = await screen.findByRole('group', { name: 'Token 用量与上下文' })
+  expect(within(controls).getByLabelText('查看 token 用量与上下文').textContent).toBe('—')
+  expect(within(controls).queryByText('0%')).toBeNull()
+  const summary = within(controls).getByLabelText('查看 token 用量与上下文')
+  await user.click(summary)
+  expect((summary.closest('details') as HTMLDetailsElement).open).toBe(true)
+  expect(within(controls).getByText('至少 1,200')).toBeTruthy()
+  expect(within(controls).getAllByText('未知').length).toBeGreaterThan(0)
+  await user.keyboard('{Escape}')
+  expect((summary.closest('details') as HTMLDetailsElement).open).toBe(false)
+  expect(document.activeElement).toBe(summary)
+})
+
+it('keeps successful compaction feedback visible after refreshing the context estimate', async () => {
+  vi.mocked(bridge.getConversationContext).mockResolvedValue({ tokens: 8000, contextWindow: 16000 })
+  vi.mocked(bridge.compactConversation).mockImplementation(async () => {
+    vi.mocked(bridge.getConversationContext).mockResolvedValue({ tokens: null, contextWindow: 16000 })
+  })
+  const user = userEvent.setup(); await openApp()
+  const summary = await screen.findByLabelText('查看 token 用量与上下文')
+  await within(summary).findByText('50%')
+  await user.click(summary)
+  await user.click(screen.getByRole('button', { name: '压缩上下文' }))
+  await within(summary).findByText('—')
+  expect(await screen.findByText('上下文已压缩，历史消息仍可查看')).toBeTruthy()
+})
+
+describe('companion workspace', () => {
+  it('shows the memory entry as an unavailable page with no conversation actions', async () => {
+    render(<App />)
+    await screen.findByRole('textbox', { name: '消息' })
+    await userEvent.click(screen.getByRole('button', { name: '她记得的事' }))
+    expect(await screen.findByText('记忆功能尚未开放')).toBeTruthy()
+    expect(screen.queryByRole('textbox', { name: '消息' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '发送' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '新对话' })).toBeNull()
+    expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'memory' })
+  })
+
+  it('failed_detail_read_is_not_empty_and_cannot_send', async () => {
+    vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => {
+      if (selection.section === 'work' && selection.conversationId) throw new Error('读取失败哨兵')
+      return snapshot(selection)
+    })
+    render(<App />)
+    await screen.findByRole('textbox', { name: '消息' })
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    await userEvent.click(await screen.findByRole('button', { name: conversation.title }))
+    expect((await screen.findByRole('alert')).textContent).toContain('读取失败哨兵')
+    expect(screen.queryByRole('heading', { name: '我在，慢慢说。' })).toBeNull()
+    expect(screen.queryByRole('textbox', { name: '消息' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '发送' })).toBeNull()
+    expect(bridge.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('same_page_refresh_retains_readable_content_but_blocks_actions_until_reloaded', async () => {
+    const nextRead = deferred<WorkspaceSnapshot>()
+    let reads = 0
+    const dailyMessage: ChatMessage = { ...userMessage, id: 'daily-user', conversationId: 'daily', content: '今天想去散步' }
+    vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => {
+      if (selection.section === 'daily' && ++reads === 2) return nextRead.promise
+      const result = await snapshot(selection)
+      return selection.section === 'daily' ? { ...result, messages: [dailyMessage] } : result
+    })
+    render(<App />)
+    expect(await screen.findByText('今天想去散步')).toBeTruthy()
+    await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '回来再聊')
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+    expect(screen.getByText('今天想去散步')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => nextRead.reject(new Error('刷新失败哨兵')))
+    expect(screen.getByText('今天想去散步')).toBeTruthy()
+    expect((screen.getByRole('button', { name: '发送' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((await screen.findByRole('alert')).textContent).toContain('刷新失败哨兵')
+    expect(bridge.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('draft_returns_to_its_owner_without_leaking_into_daily', async () => {
+    render(<App />)
+    await screen.findByRole('textbox', { name: '消息' })
+    await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '日常草稿')
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    await userEvent.click(await screen.findByRole('button', { name: conversation.title }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('')
+    await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '话题草稿')
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('日常草稿')
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    await userEvent.click(await screen.findByRole('button', { name: conversation.title }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('话题草稿')
+  })
+
+  it('failed_send_after_switch_restores_only_the_origin_draft', async () => {
+    const sending = deferred<SendMessageResult>()
+    vi.mocked(bridge.sendMessage).mockReturnValue(sending.promise)
+    render(<App />)
+    await screen.findByRole('textbox', { name: '消息' })
+    await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '还没发出的日常话')
+    await userEvent.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledOnce())
+    await openTopic(conversation.title)
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('')
+    await act(async () => sending.reject(new Error('发送失败哨兵')))
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('还没发出的日常话')
+  })
+
+  it('pending_read_failure_is_explicit_and_can_be_retried', async () => {
+    vi.mocked(bridge.getPendingActions).mockRejectedValueOnce(new Error('read failed')).mockResolvedValueOnce([])
+    render(<App />)
+    expect(await screen.findByText('待处理信息暂时无法读取。')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '重新读取' }))
+    await waitFor(() => expect(bridge.getPendingActions).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByText('待处理信息暂时无法读取。')).toBeNull())
+  })
+
+  it('queue_read_failure_is_explicit_and_can_be_retried', async () => {
+    vi.mocked(bridge.getQueue).mockRejectedValue(new Error('read failed'))
+    await openApp()
+    expect(await screen.findByText('待发消息暂时无法读取。')).toBeTruthy()
+    const readsBeforeRetry = vi.mocked(bridge.getQueue).mock.calls.length
+    vi.mocked(bridge.getQueue).mockImplementation(async conversationId => ({ conversationId, items: [], paused: null, running: false, compacting: false }))
+    await userEvent.click(screen.getByRole('button', { name: '重新读取' }))
+    await waitFor(() => expect(bridge.getQueue).toHaveBeenCalledTimes(readsBeforeRetry + 1))
+    await waitFor(() => expect(screen.queryByText('待发消息暂时无法读取。')).toBeNull())
+  })
+
+  it('cancel_before_submit_keeps_original_context', async () => {
+    const message: ChatMessage = { ...userMessage, id: 'daily-source', conversationId: 'daily', content: '周末想去河边走走' }
+    vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => selection.section === 'daily' ? { ...await snapshot(selection), messages: [message] } : snapshot(selection))
+    render(<App />)
+    await screen.findByText('周末想去河边走走')
+    await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '原来的草稿')
+    await userEvent.click(screen.getByRole('button', { name: '单独聊这件事' }))
+    await userEvent.click(screen.getByRole('button', { name: '留在日常' }))
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('原来的草稿')
+    expect(bridge.commitTopicHandoff).not.toHaveBeenCalled()
+  })
+
+  it('lost_commit_reply_queries_same_operation', async () => {
+    const message: ChatMessage = { ...userMessage, id: 'daily-source', conversationId: 'daily', content: '周末想去河边走走' }
+    vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => selection.section === 'daily' ? { ...await snapshot(selection), messages: [message] } : snapshot(selection))
+    vi.mocked(bridge.previewTopicHandoff).mockResolvedValue({ id: 'preview-1', digest: 'digest-1', sourceConversationId: 'daily',
+      excerpts: [{ messageId: 'daily-source', role: 'user', text: message.content, createdAt: message.createdAt }], receiverLabel: '本地服务', omittedCount: 0 })
+    vi.mocked(bridge.commitTopicHandoff).mockRejectedValue(new Error('reply lost'))
+    vi.mocked(bridge.getTopicHandoffOperation).mockImplementation(async id => ({ operationId: id, status: 'preparing' }))
+    render(<App />)
+    await screen.findByText('周末想去河边走走')
+    await userEvent.click(screen.getByRole('button', { name: '单独聊这件事' }))
+    await screen.findByText('你 · 来自日常 · 本次选定内容')
+    await userEvent.click(screen.getByRole('button', { name: '确认并另开话题' }))
+    expect(await screen.findByText(/仍在核实这次保存/)).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '留在日常' }))
+    await userEvent.click(screen.getByRole('button', { name: '单独聊这件事' }))
+    await userEvent.click(screen.getByRole('button', { name: '核实这次保存' }))
+    expect(bridge.commitTopicHandoff).toHaveBeenCalledTimes(1)
+    expect(bridge.getTopicHandoffOperation).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(bridge.getTopicHandoffOperation).mock.calls[0][0]).toBe(vi.mocked(bridge.getTopicHandoffOperation).mock.calls[1][0])
+  })
+
+  it('two_confirmation_clicks_in_one_render_use_one_operation', async () => {
+    const message: ChatMessage = { ...userMessage, id: 'daily-source', conversationId: 'daily', content: '周末去河边' }
+    const commit = deferred<import('../src/shared/types').TopicHandoffOperation>()
+    vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => selection.section === 'daily' ? { ...await snapshot(selection), messages: [message] } : snapshot(selection))
+    vi.mocked(bridge.previewTopicHandoff).mockResolvedValue({ id: 'preview-1', digest: 'digest-1', sourceConversationId: 'daily',
+      excerpts: [{ messageId: 'daily-source', role: 'user', text: message.content, createdAt: message.createdAt }], receiverLabel: '本地服务', omittedCount: 0 })
+    vi.mocked(bridge.commitTopicHandoff).mockReturnValue(commit.promise)
+    render(<App />)
+    await screen.findByText('周末去河边')
+    await userEvent.click(screen.getByRole('button', { name: '单独聊这件事' }))
+    const confirm = await screen.findByRole('button', { name: '确认并另开话题' })
+    act(() => { fireEvent.click(confirm); fireEvent.click(confirm) })
+    expect(bridge.commitTopicHandoff).toHaveBeenCalledTimes(1)
+    await act(async () => commit.resolve({ operationId: vi.mocked(bridge.commitTopicHandoff).mock.calls[0][0].operationId, status: 'preparing' }))
+  })
+
+
+  it('daily_is_default_and_work_history_is_reachable', async () => {
+    render(<App />)
+    expect((await screen.findByRole('button', { name: '日常' })).getAttribute('aria-current')).toBe('page')
+    expect(screen.queryByRole('button', { name: conversation.title })).toBeNull()
+    expect(screen.getByRole('button', { name: '她记得的事' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    expect((await screen.findAllByRole('heading', { name: '一起在做的事' })).length).toBeGreaterThan(0)
+    await userEvent.click(screen.getByRole('button', { name: '另开一个话题' }))
+    expect(await screen.findByRole('heading', { name: '这件事，我们从哪里开始？' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+    expect(screen.queryByRole('heading', { name: '这件事，我们从哪里开始？' })).toBeNull()
+  })
+})
+
+
+it('private_pending_requires_opening_original_topic', async () => {
+  const notice: PendingActionNotice = { id: 'opaque-notice', version: 1, status: 'waiting_approval' }
+  backendState.conversations.push({ ...conversation, id: 'private', title: '工作秘密哨兵' })
+  const approval = taskEvent()
+  approval.run.status = 'waiting_approval'
+  approval.conversationId = 'private'; approval.run.conversationId = 'private'; approval.approval!.target = '工作秘密哨兵'
+  vi.mocked(bridge.getConversationTask).mockImplementation(async id => id === 'private' ? approval : null)
+  vi.mocked(bridge.getPendingActions).mockResolvedValue([notice])
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: 'private' })
+  render(<App />)
+  expect(await screen.findByText('有一件事需要你确认')).toBeTruthy()
+  expect(screen.queryByText('工作秘密哨兵')).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '查看' }))
+  expect(bridge.resolvePendingAction).toHaveBeenCalledWith({ id: notice.id, version: notice.version })
+  expect(await screen.findByRole('heading', { name: '工作秘密哨兵' })).toBeTruthy()
+  await userEvent.click(screen.getByRole('button', { name: '确认' }))
+  expect(bridge.decideToolApproval).toHaveBeenCalledWith({ approvalId: 'approval-1', revision: 'rev-1', decision: 'approve' })
+})
+
+it('late_workspace_event_does_not_replace_selection', async () => {
+  await openApp()
+  const version = selectionVersion
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await act(async () => emitWorkspace({ selectionVersion: version, event: { requestId: 'late', conversationId: conversation.id, message: { ...assistantMessage, content: '工作秘密哨兵' }, done: false } }))
+  expect(screen.queryByText('工作秘密哨兵')).toBeNull()
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+})
+
+it('trashing_a_topic_from_the_list_keeps_other_topics_available', async () => {
+  backendState.conversations.push({ ...conversation, id: 'private', title: '工作秘密哨兵' })
+  await openApp()
+  await trashTopic(conversation.title)
+  expect(await screen.findByRole('heading', { name: '一起在做的事' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: conversation.title })).toBeNull()
+  expect(screen.getByRole('button', { name: '工作秘密哨兵' })).toBeTruthy()
+})
+
+
+it('returning to daily restores its scroll position without loading background tasks', async () => {
+  render(<App />)
+  await screen.findByRole('heading', { name: '日常' })
+  const area = document.querySelector<HTMLDivElement>('.chat-scroll')!
+  Object.defineProperty(area, 'scrollHeight', { configurable: true, value: 2400 })
+  Object.defineProperty(area, 'clientHeight', { configurable: true, value: 400 })
+  area.scrollTop = 275
+  fireEvent.scroll(area)
+  await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  area.scrollTop = 0
+  await userEvent.click(screen.getByRole('button', { name: conversation.title }))
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  expect(area.scrollTop).toBe(275)
+  expect(bridge.getConversationTask).toHaveBeenCalledTimes(1)
+  expect(bridge.getConversationTask).toHaveBeenCalledWith(conversation.id)
+})
+
+it('a same-sequence task envelope cannot suppress its message envelope', async () => {
+  await openApp()
+  const event = { ...taskEvent('running'), seq: 55, runId: 'same-run' }
+  act(() => emitWorkspaceTask({ selectionVersion, event }))
+  act(() => emitWorkspace({ selectionVersion, event: { conversationId: conversation.id, requestId: event.requestId, runId: 'same-run', seq: 55, message: { ...assistantMessage, content: '仍然显示的文字' }, done: false } }))
+  expect(await within(screen.getByLabelText('聊天消息')).findByText('仍然显示的文字')).toBeTruthy()
+  expect(screen.getByRole('button', { name: '停止生成' })).toBeTruthy()
+})
+
+it('a stale pending notice does not select a work topic or disclose details', async () => {
+  const notice: PendingActionNotice = { id: 'expired', version: 1, status: 'waiting_approval' }
+  vi.mocked(bridge.getPendingActions).mockResolvedValue([notice])
+  render(<App />)
+  await userEvent.click(await screen.findByRole('button', { name: '查看' }))
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+  expect(bridge.selectWorkspace).toHaveBeenCalledTimes(1)
+  expect(screen.queryByText('有一件事需要你确认')).toBeNull()
+  expect(screen.getByRole('alert').textContent).toContain('这件事的状态已更新')
+})
+
+it('a rejected send from the previous work topic cannot expose its error in daily', async () => {
+  const sending = deferred<SendMessageResult>()
+  vi.mocked(bridge.sendMessage).mockReturnValue(sending.promise)
+  await openApp()
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '私密工作')
+  await userEvent.click(screen.getByRole('button', { name: '发送' }))
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await act(async () => sending.reject(new Error('工作秘密哨兵')))
+  expect(screen.queryByText(/工作秘密哨兵/)).toBeNull()
+})
+
+it.each(['renameConversation', 'trashConversation', 'resumeQueue', 'cancelMessage', 'createConversation', 'switchModel'] as const)('a late %s error cannot leak into daily or clear its draft', async method => {
+  const pending = deferred<never>()
+  vi.mocked(bridge[method]).mockReturnValueOnce(pending.promise)
+  backendActiveRequest = method === 'cancelMessage' ? { conversationId: conversation.id, requestId: 'old-work' } : null
+  backendState.profiles[0].models.push({ ...structuredClone(profile.models[0]), id: 'other-model' })
+  vi.mocked(bridge.getQueue).mockImplementation(async conversationId => ({ conversationId, items: [{ requestId: 'queued', userMessageId: 'queued-user', preview: '待处理', profileId: profile.id, model: profile.model, createdAt: conversation.createdAt }], paused: 'stopped', running: false, compacting: false }))
+  await openApp()
+  if (method === 'renameConversation') {
+    fireEvent.click(screen.getByRole('button', { name: '重命名对话' }))
+    fireEvent.change(screen.getByLabelText('对话标题'), { target: { value: '旧标题' } })
+    fireEvent.keyDown(screen.getByLabelText('对话标题'), { key: 'Enter' })
+  } else if (method === 'switchModel') {
+    fireEvent.change(screen.getByLabelText('当前模型', { exact: true }), { target: { value: 'other-model' } })
+  } else if (method === 'trashConversation') {
+    await trashTopic(conversation.title)
+  } else if (method === 'createConversation') {
+    await userEvent.click(screen.getByRole('button', { name: '返回话题' }))
+    await userEvent.click(screen.getByRole('button', { name: '另开一个话题' }))
+  } else {
+    const name = method === 'resumeQueue' ? '继续队列' : '停止生成'
+    fireEvent.click(screen.getByRole('button', { name }))
+  }
+  await waitFor(() => expect(bridge[method]).toHaveBeenCalled())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '日常的新草稿')
+  await act(async () => pending.reject(new Error('工作秘密哨兵')))
+  expect(screen.queryByText(/工作秘密哨兵/)).toBeNull()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('日常的新草稿')
+})
+
+it('a late successful trash cannot navigate away from the newly selected work or clear its draft', async () => {
+  const pending = deferred<void>()
+  vi.mocked(bridge.trashConversation).mockReturnValueOnce(pending.promise)
+  backendState.conversations.push({ ...conversation, id: 'other', title: '新的工作' })
+  await openApp()
+  await trashTopic(conversation.title)
+  await userEvent.click(screen.getByRole('button', { name: '新的工作' }))
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '新工作草稿')
+  await act(async () => pending.resolve())
+  expect(screen.getByRole('heading', { name: '新的工作' })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('新工作草稿')
+})
+
+it.each(['daily', 'work'] as const)('opens a daily-origin pending approval from %s in the daily section', async section => {
+  const notice: PendingActionNotice = { id: 'daily-approval', version: 1, status: 'waiting_approval' }
+  const dailyTask = taskEvent()
+  dailyTask.conversationId = 'daily'; dailyTask.run.conversationId = 'daily'
+  vi.mocked(bridge.getPendingActions).mockResolvedValue([notice])
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: 'daily' })
+  vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => {
+    if (selection.section === 'work' && selection.conversationId === 'daily') throw new Error('话题不属于此工作区。')
+    const result = await snapshot(selection)
+    return selection.section === 'daily' ? { ...result, task: dailyTask } : result
+  })
+  render(<App />)
+  await screen.findByRole('heading', { name: '日常' })
+  if (section === 'work') {
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    expect(screen.queryByRole('button', { name: '查看' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  }
+  await userEvent.click(screen.getByRole('button', { name: '查看' }))
+  expect(await screen.findByRole('button', { name: '确认' })).toBeTruthy()
+  expect(screen.queryByText(/话题不属于此工作区/)).toBeNull()
+  expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'daily', conversationId: 'daily' })
+  await userEvent.click(screen.getByRole('button', { name: '确认' }))
+  expect(bridge.decideToolApproval).toHaveBeenCalledWith({ approvalId: 'approval-1', revision: 'rev-1', decision: 'approve' })
+})
+
+it.each(['resolve', 'reject'] as const)('late daily selection %s preserves a newer topic draft', async outcome => {
+  backendState.conversations.push({ ...conversation, id: 'new-work', title: '新的工作' })
+  await openApp()
+  const daily = deferred<WorkspaceSnapshot>()
+  const oldDaily = { ...createdSnapshot('daily', '日常'), selection: { section: 'daily' as const, conversationId: 'daily' } }
+  vi.mocked(bridge.selectWorkspace).mockReturnValueOnce(daily.promise)
+  fireEvent.click(screen.getByRole('button', { name: '日常' }))
+  await waitFor(() => expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'daily' }))
+  await openTopic('新的工作')
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '新工作草稿')
+  await act(async () => { if (outcome === 'resolve') daily.resolve(oldDaily); else daily.reject(new Error('旧日常读取失败')) })
+  expect(screen.getByRole('heading', { name: '新的工作' })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('新工作草稿')
+  expect(screen.queryByText(/旧日常读取失败/)).toBeNull()
+})
+
+it('restoring unrelated trash preserves the current composer and scroll without changing the selected event version', async () => {
+  trashedState = [{ ...conversation, id: 'restored', title: '恢复的工作', deletedAt: '2026-10-22T00:00:00Z' }]
+  vi.mocked(bridge.selectFiles).mockResolvedValue({ grants: [documentGrant], files: [documentFile] })
+  await openApp()
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '保留草稿和附件')
+  await chooseFiles()
+  expect(await screen.findByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
+  const area = document.querySelector<HTMLDivElement>('.chat-scroll')!
+  Object.defineProperty(area, 'scrollHeight', { configurable: true, value: 2400 })
+  Object.defineProperty(area, 'clientHeight', { configurable: true, value: 400 })
+  area.scrollTop = 145; fireEvent.scroll(area)
+  const oldVersion = selectionVersion
+  await userEvent.click(screen.getByRole('button', { name: '回收站' }))
+  await userEvent.click(await screen.findByRole('button', { name: '恢复 恢复的工作' }))
+  await waitFor(() => expect(backendState.conversations.some(item => item.title === '恢复的工作')).toBe(true))
+  expect(screen.getByRole('heading', { name: conversation.title })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('保留草稿和附件')
+  expect(screen.getByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
+  expect(area.scrollTop).toBe(145)
+  expect(selectionVersion).toBe(oldVersion)
+  act(() => emitWorkspace({ selectionVersion: oldVersion - 1, event: { conversationId: conversation.id, requestId: 'obsolete', message: { ...assistantMessage, content: '旧版本内容' }, done: false } }))
+  act(() => emitWorkspace({ selectionVersion, event: { conversationId: conversation.id, requestId: 'current', message: { ...assistantMessage, content: '刷新后的内容' }, done: false } }))
+  expect(await within(screen.getByLabelText('聊天消息')).findByText('刷新后的内容')).toBeTruthy()
+  expect(screen.queryByText('旧版本内容')).toBeNull()
+})
+
+it('a restored-list refresh accepts current-topic events in flight without rolling back their final state', async () => {
+  trashedState = [{ ...conversation, id: 'restored', title: '恢复的工作', deletedAt: '2026-10-22T00:00:00Z' }]
+  vi.mocked(bridge.getMessages).mockResolvedValue([userMessage, { ...assistantMessage, content: '刷新前的片段' }])
+  vi.mocked(bridge.getConversationTask).mockResolvedValue(taskEvent('running'))
+  await openApp()
+  const refreshing = deferred<WorkspaceListItem[]>()
+  let listed: WorkspaceListItem[] | undefined
+  vi.mocked(bridge.listWorkItems).mockImplementationOnce(async () => { listed = backendState.conversations.map(conversation => ({ conversation, topic: null })); return refreshing.promise })
+  await userEvent.click(screen.getByRole('button', { name: '回收站' }))
+  await userEvent.click(await screen.findByRole('button', { name: '恢复 恢复的工作' }))
+  await waitFor(() => expect(listed).toBeDefined())
+  act(() => emitWorkspaceTask({ selectionVersion, event: { ...taskEvent('completed'), runId: 'run-1', seq: 10 } }))
+  act(() => emitWorkspace({ selectionVersion, event: { conversationId: conversation.id, requestId: 'task-request', runId: 'run-1', seq: 10, message: { ...assistantMessage, content: '刷新期间完成的回复', status: 'complete' }, done: true } }))
+  expect(await within(screen.getByLabelText('聊天消息')).findByText('刷新期间完成的回复')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+  await act(async () => refreshing.resolve(listed!))
+  expect(within(screen.getByLabelText('聊天消息')).getByText('刷新期间完成的回复')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+})
+
+it('a newer daily navigation wins over an in-flight restored-list refresh and its events', async () => {
+  trashedState = [{ ...conversation, id: 'restored', title: '恢复的工作', deletedAt: '2026-10-22T00:00:00Z' }]
+  await openApp()
+  const refreshing = deferred<WorkspaceListItem[]>()
+  const eventVersion = selectionVersion
+  let listed: WorkspaceListItem[] | undefined
+  vi.mocked(bridge.listWorkItems).mockImplementationOnce(async () => { listed = backendState.conversations.map(conversation => ({ conversation, topic: null })); return refreshing.promise })
+  await userEvent.click(screen.getByRole('button', { name: '回收站' }))
+  await userEvent.click(await screen.findByRole('button', { name: '恢复 恢复的工作' }))
+  await waitFor(() => expect(listed).toBeDefined())
+  await userEvent.click(screen.getByRole('button', { name: '关闭回收站' }))
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '日常的新草稿')
+  act(() => emitWorkspace({ selectionVersion: eventVersion, event: { conversationId: conversation.id, requestId: 'private', message: { ...assistantMessage, content: '工作秘密哨兵' }, done: false } }))
+  await act(async () => refreshing.resolve(listed!))
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('日常的新草稿')
+  expect(screen.queryByText('工作秘密哨兵')).toBeNull()
+  expect(screen.queryByRole('button', { name: '恢复的工作' })).toBeNull()
+})
+
+it('a failed optional work-list refresh keeps current chat, task and request events usable', async () => {
+  trashedState = [{ ...conversation, id: 'restored', title: '恢复的工作', deletedAt: '2026-10-22T00:00:00Z' }]
+  await openApp()
+  const selectedVersion = selectionVersion
+  const selections = vi.mocked(bridge.selectWorkspace).mock.calls.length
+  // Reproduce the retired select-as-refresh failure ordering: version changes before a failed detail read.
+  vi.mocked(bridge.selectWorkspace).mockImplementationOnce(async selection => { await snapshot(selection); throw new Error('列表读取失败') })
+  vi.mocked(bridge.listWorkItems).mockRejectedValueOnce(new Error('列表读取失败'))
+  await userEvent.click(screen.getByRole('button', { name: '回收站' }))
+  await userEvent.click(await screen.findByRole('button', { name: '恢复 恢复的工作' }))
+  await screen.findByText(/无法刷新工作列表/)
+  act(() => emitRequest({ conversationId: conversation.id, requestId: 'after-list', state: 'started' }))
+  expect(screen.getByRole('button', { name: '停止生成' })).toBeTruthy()
+  const approval = taskEvent()
+  approval.requestId = 'after-list'; approval.run.requestId = 'after-list'
+  act(() => emitWorkspaceTask({ selectionVersion, event: approval }))
+  expect(screen.getByRole('button', { name: '确认' })).toBeTruthy()
+  act(() => emitWorkspace({ selectionVersion, event: { conversationId: conversation.id, requestId: 'after-list', message: { ...assistantMessage, content: '失败刷新后的有效回复' }, done: false } }))
+  expect(within(screen.getByLabelText('聊天消息')).getByText('失败刷新后的有效回复')).toBeTruthy()
+  act(() => emitRequest({ conversationId: conversation.id, requestId: 'after-list', state: 'completed' }))
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+  expect(selectionVersion).toBe(selectedVersion)
+  expect(bridge.selectWorkspace).toHaveBeenCalledTimes(selections)
+})
+
+it('native notice queued before bootstrap resolves opens daily with current selection version', async () => {
+  const notice: PendingActionNotice = { id: 'native-daily', status: 'waiting_approval', version: 1 }
+  const boot = deferred<BootstrapState>()
+  vi.mocked(bridge.getBootstrap).mockReturnValueOnce(boot.promise)
+  vi.mocked(bridge.getPendingActionOpen).mockResolvedValue(notice)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: 'daily' })
+  render(<App />)
+  await act(async () => { boot.resolve(backendState) })
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledWith({ id: notice.id, version: 1 }))
+  expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'daily', conversationId: 'daily' })
+  const incoming = { ...assistantMessage, conversationId: 'daily', content: 'native selection event accepted' }
+  await act(async () => emitWorkspace({ selectionVersion, event: { conversationId: 'daily', requestId: 'native-request', done: false, message: incoming } }))
+  expect(screen.getByText(incoming.content)).toBeTruthy()
+})
+it('stale native notice only acknowledges without opening a workspace', async () => {
+  render(<App />); await screen.findByRole('heading', { name: '日常' })
+  const calls = vi.mocked(bridge.selectWorkspace).mock.calls.length
+  const notice: PendingActionNotice = { id: 'stale-native', status: 'paused', version: 3 }
+  vi.mocked(bridge.getPendingActionOpen).mockResolvedValue(notice)
+  await act(async () => emitPendingOpen())
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledWith({ id: notice.id, version: 3 }))
+  expect(bridge.selectWorkspace).toHaveBeenCalledTimes(calls)
+})
+
+it.each(['resolve', 'snapshot'] as const)('failed native notice %s remains queued and opens after renderer reload', async phase => {
+  let queued: PendingActionNotice | null = null
+  const notice: PendingActionNotice = { id: 'retained-native', status: 'waiting_approval', version: 7 }
+  vi.mocked(bridge.getPendingActionOpen).mockImplementation(async () => queued)
+  vi.mocked(bridge.ackPendingActionOpen).mockImplementation(async input => {
+    if (queued?.id === input.id && queued.version === input.version) queued = null
+  })
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  const first = render(<App />)
+  await screen.findByRole('heading', { name: '日常' })
+  queued = notice
+  if (phase === 'resolve') vi.mocked(bridge.resolvePendingAction).mockRejectedValueOnce(new Error('通知定位暂时失败'))
+  else vi.mocked(bridge.selectWorkspace).mockRejectedValueOnce(new Error('通知快照暂时失败'))
+  await act(async () => emitPendingOpen())
+  expect(await screen.findByText(phase === 'resolve' ? '通知定位暂时失败' : /通知快照暂时失败/)).toBeTruthy()
+  expect(bridge.ackPendingActionOpen).not.toHaveBeenCalled()
+  expect(queued).toEqual(notice)
+  first.unmount()
+  render(<App />)
+  expect(await screen.findByRole('heading', { name: conversation.title })).toBeTruthy()
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledWith({ id: notice.id, version: notice.version }))
+  expect(queued).toBeNull()
+})
+
+it.each(['resolve', 'snapshot'] as const)('new user selection consumes superseded native %s without later redirect', async phase => {
+  const notice: PendingActionNotice = { id: 'superseded-native', status: 'waiting_approval', version: 2 }
+  render(<App />)
+  await screen.findByRole('heading', { name: '日常' })
+  const resolving = deferred<{ conversationId: string } | null>()
+  const selecting = deferred<WorkspaceSnapshot>()
+  vi.mocked(bridge.getPendingActionOpen).mockResolvedValue(notice)
+  vi.mocked(bridge.resolvePendingAction).mockImplementationOnce(() => phase === 'resolve' ? resolving.promise : Promise.resolve({ conversationId: conversation.id }))
+  let delayedSnapshot: WorkspaceSnapshot | undefined
+  if (phase === 'snapshot') vi.mocked(bridge.selectWorkspace).mockImplementationOnce(async selection => { delayedSnapshot = await snapshot(selection); return selecting.promise })
+  await act(async () => emitPendingOpen())
+  await waitFor(() => expect(bridge.resolvePendingAction).toHaveBeenCalledWith({ id: notice.id, version: notice.version }))
+  if (phase === 'snapshot') await waitFor(() => expect(delayedSnapshot).toBeDefined())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await act(async () => {
+    if (phase === 'resolve') resolving.resolve({ conversationId: conversation.id })
+    else selecting.resolve(delayedSnapshot!)
+  })
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledWith({ id: notice.id, version: notice.version }))
+  expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'daily' })
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+  expect(screen.queryByRole('heading', { name: conversation.title })).toBeNull()
+})
+
+it('late native inbox consumes only the superseded notice and preserves newer daily draft and attachments', async () => {
+  await openApp()
+  const inbox = deferred<PendingActionNotice | null>()
+  const notice: PendingActionNotice = { id: 'late-inbox', status: 'waiting_approval', version: 4 }
+  vi.mocked(bridge.getPendingActionOpen).mockReturnValueOnce(inbox.promise)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  await act(async () => emitPendingOpen())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '新日常草稿不能丢失')
+  vi.mocked(bridge.selectFiles).mockResolvedValueOnce({ grants: [{ ...documentGrant, conversationId: 'daily' }], files: [documentFile] })
+  await chooseFiles()
+  expect(await screen.findByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
+  const calls = vi.mocked(bridge.selectWorkspace).mock.calls.length
+  await act(async () => inbox.resolve(notice))
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+  expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('新日常草稿不能丢失')
+  expect(screen.getByRole('button', { name: '移除 notes.pdf' })).toBeTruthy()
+  expect(bridge.selectWorkspace).toHaveBeenCalledTimes(calls)
+  expect(bridge.resolvePendingAction).not.toHaveBeenCalled()
+  expect(bridge.ackPendingActionOpen).toHaveBeenCalledExactlyOnceWith({ id: notice.id, version: notice.version })
+})
+
+it.each(['before', 'after'] as const)('queued native wakeup %s newer navigation keeps its own navigation ownership', async arrival => {
+  await openApp()
+  const inbox = deferred<PendingActionNotice | null>()
+  const oldNotice: PendingActionNotice = { id: 'same-notice-id', status: 'paused', version: 1 }
+  const newNotice = { ...oldNotice, version: 2 }
+  let queued: PendingActionNotice | null = newNotice
+  vi.mocked(bridge.getPendingActionOpen).mockReturnValueOnce(inbox.promise).mockImplementation(async () => queued)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  vi.mocked(bridge.ackPendingActionOpen).mockImplementation(async input => {
+    if (input.id === queued?.id && input.version === queued.version) queued = null
+  })
+  await act(async () => emitPendingOpen())
+  if (arrival === 'before') await act(async () => emitPendingOpen())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await userEvent.type(screen.getByRole('textbox', { name: '消息' }), '用户最新草稿')
+  if (arrival === 'after') await act(async () => emitPendingOpen())
+  await act(async () => inbox.resolve(oldNotice))
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledExactlyOnceWith({ id: newNotice.id, version: 2 }))
+  expect(bridge.ackPendingActionOpen).not.toHaveBeenCalledWith({ id: oldNotice.id, version: 1 })
+  expect(queued).toBeNull()
+  if (arrival === 'before') {
+    expect(bridge.resolvePendingAction).not.toHaveBeenCalled()
+    expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: '消息' }) as HTMLTextAreaElement).value).toBe('用户最新草稿')
+  } else {
+    expect(bridge.resolvePendingAction).toHaveBeenCalledExactlyOnceWith({ id: newNotice.id, version: 2 })
+    expect(screen.getByRole('heading', { name: conversation.title })).toBeTruthy()
+  }
+})
+
+it('failed native inbox is not consumed and can open after renderer reload', async () => {
+  let queued: PendingActionNotice | null = null
+  const notice: PendingActionNotice = { id: 'unread-inbox', status: 'paused', version: 5 }
+  vi.mocked(bridge.getPendingActionOpen).mockImplementation(async () => queued)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  vi.mocked(bridge.ackPendingActionOpen).mockImplementation(async () => { queued = null })
+  const first = render(<App />)
+  await screen.findByRole('heading', { name: '日常' })
+  queued = notice
+  vi.mocked(bridge.getPendingActionOpen).mockRejectedValueOnce(new Error('inbox temporarily unavailable'))
+  await act(async () => emitPendingOpen())
+  expect(bridge.ackPendingActionOpen).not.toHaveBeenCalled()
+  expect(queued).toEqual(notice)
+  first.unmount(); render(<App />)
+  expect(await screen.findByRole('heading', { name: conversation.title })).toBeTruthy()
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledExactlyOnceWith({ id: notice.id, version: 5 }))
+})
+
+it.each(['inbox', 'resolve'] as const)('failed native %s does not block a newer queued native click', async phase => {
+  render(<App />); await screen.findByRole('heading', { name: '日常' })
+  const inbox = deferred<PendingActionNotice | null>()
+  const resolving = deferred<{ conversationId: string } | null>()
+  const oldNotice: PendingActionNotice = { id: 'old-failed', status: 'paused', version: 1 }
+  const newNotice: PendingActionNotice = { id: 'new-valid', status: 'paused', version: 3 }
+  vi.mocked(bridge.getPendingActionOpen).mockReturnValueOnce(phase === 'inbox' ? inbox.promise : Promise.resolve(oldNotice)).mockResolvedValue(newNotice)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  if (phase === 'resolve') vi.mocked(bridge.resolvePendingAction).mockReturnValueOnce(resolving.promise)
+  await act(async () => emitPendingOpen())
+  await act(async () => emitPendingOpen())
+  await act(async () => {
+    if (phase === 'inbox') inbox.reject(new Error('old inbox failed'))
+    else resolving.reject(new Error('old resolution failed'))
+  })
+  expect(await screen.findByRole('heading', { name: conversation.title })).toBeTruthy()
+  await waitFor(() => expect(bridge.ackPendingActionOpen).toHaveBeenCalledExactlyOnceWith({ id: newNotice.id, version: 3 }))
+})
+
+it.each(['opened', 'failed'] as const)('queued native wakeup survives the first native click own %s selection', async outcome => {
+  render(<App />); await screen.findByRole('heading', { name: '日常' })
+  const oldNotice: PendingActionNotice = { id: 'native-first', status: 'paused', version: 1 }
+  const newNotice: PendingActionNotice = { id: 'native-second', status: 'paused', version: 2 }
+  const resolving = deferred<{ conversationId: string } | null>()
+  vi.mocked(bridge.getPendingActionOpen).mockResolvedValueOnce(oldNotice).mockResolvedValue(newNotice)
+  vi.mocked(bridge.resolvePendingAction).mockReturnValueOnce(resolving.promise).mockResolvedValue({ conversationId: 'daily' })
+  if (outcome === 'failed') vi.mocked(bridge.selectWorkspace).mockRejectedValueOnce(new Error('first native snapshot failed'))
+  await act(async () => emitPendingOpen())
+  await act(async () => emitPendingOpen())
+  await act(async () => resolving.resolve({ conversationId: conversation.id }))
+  await waitFor(() => expect(bridge.resolvePendingAction).toHaveBeenCalledWith({ id: newNotice.id, version: newNotice.version }))
+  expect(bridge.selectWorkspace).toHaveBeenLastCalledWith({ section: 'daily', conversationId: 'daily' })
+  expect(screen.getByRole('heading', { name: '日常' })).toBeTruthy()
+  expect(bridge.ackPendingActionOpen).toHaveBeenCalledWith({ id: newNotice.id, version: newNotice.version })
+  if (outcome === 'failed') expect(bridge.ackPendingActionOpen).not.toHaveBeenCalledWith({ id: oldNotice.id, version: oldNotice.version })
+})
+
+it('superseded native inbox may already contain the newer click and must not consume it early', async () => {
+  await openApp()
+  const inbox = deferred<PendingActionNotice | null>()
+  const notice: PendingActionNotice = { id: 'latest-inbox-identity', status: 'paused', version: 9 }
+  let queued: PendingActionNotice | null = notice
+  vi.mocked(bridge.getPendingActionOpen).mockReturnValueOnce(inbox.promise).mockImplementation(async () => queued)
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  vi.mocked(bridge.ackPendingActionOpen).mockImplementation(async input => {
+    if (queued?.id === input.id && queued.version === input.version) queued = null
+  })
+  await act(async () => emitPendingOpen())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await act(async () => emitPendingOpen())
+  await act(async () => inbox.resolve(notice))
+  expect(await screen.findByRole('heading', { name: conversation.title })).toBeTruthy()
+  expect(bridge.resolvePendingAction).toHaveBeenCalledExactlyOnceWith({ id: notice.id, version: 9 })
+  expect(bridge.ackPendingActionOpen).toHaveBeenCalledExactlyOnceWith({ id: notice.id, version: 9 })
+  expect(queued).toBeNull()
+})
+
+it('daily pending routes to original work before fetching scope cards and Her control state is not Samantha', async () => {
+  const notice: PendingActionNotice = { id: 'scope-notice', version: 3, status: 'waiting_approval' }
+  vi.mocked(bridge.getPendingActions).mockResolvedValue([notice])
+  vi.mocked(bridge.resolvePendingAction).mockResolvedValue({ conversationId: conversation.id })
+  vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => {
+    const value = await snapshot(selection)
+    if (selection.section === 'work' && value.conversation) value.topic = { conversationId: value.conversation.id, kind: 'work', shareProgress: false, shareRevision: 1 }
+    return value
+  })
+  vi.mocked(bridge.getMessages).mockResolvedValue([{ ...assistantMessage, status: 'complete', content: 'Her 状态：等待确认控制', hostStatus: true }])
+  vi.mocked(bridge.getDelegationDetails).mockResolvedValue({ conversationId: conversation.id, delegations: [], controls: [], scopes: [{ id: 'scope', revision: 4, scope: { purpose: '私密范围哨兵', objects: ['私密对象'], completion: '交付', allowedCapabilities: ['read'], origins: [], constraints: {} } }] })
+  render(<App />)
+  await screen.findByText('有一件事需要你确认')
+  expect(bridge.getDelegationDetails).not.toHaveBeenCalled()
+  expect(screen.queryByText(/私密范围哨兵/)).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '查看' }))
+  await screen.findByText(/私密范围哨兵/)
+  expect(bridge.getDelegationDetails).toHaveBeenCalledWith(conversation.id)
+  expect(screen.getByRole('img', { name: 'Her 状态' })).toBeTruthy()
+  expect(screen.queryByRole('img', { name: 'Samantha' })).toBeNull()
+  await userEvent.click(screen.getByRole('button', { name: '拒绝此范围' }))
+  expect(bridge.rejectDelegationScope).toHaveBeenCalledWith('scope', 4)
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  await screen.findByRole('heading', { name: '日常' })
+  expect(screen.queryAllByText(/私密范围哨兵|私密对象/)).toEqual([])
+})
+
+
+function terminalControlResult(conversationId: string): SendMessageResult {
+  return { controlId: 'terminal-control', userMessage: { ...userMessage, conversationId, content: '先别发' },
+    assistantMessage: { ...assistantMessage, conversationId, id: 'terminal-control', content: 'Her 状态：相关后续动作已暂缓。', status: 'complete', hostStatus: true } }
+}
+
+it.each(['daily', 'work'] as const)('terminal control in idle %s clears connecting and lets the next send own its stop identity', async section => {
+  vi.mocked(bridge.sendMessage).mockImplementationOnce(async input => terminalControlResult(input.conversationId))
+  if (section === 'work') await openApp()
+  else { render(<App />); await screen.findByRole('heading', { name: '日常' }) }
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '先别发' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  expect(await screen.findByText('Her 状态：相关后续动作已暂缓。')).toBeTruthy()
+  expect(screen.getByRole('img', { name: 'Her 状态' })).toBeTruthy()
+  expect(screen.queryByText('正在连接模型…')).toBeNull()
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+  expect((screen.getByLabelText('当前模型', { exact: true }) as HTMLSelectElement).disabled).toBe(false)
+  const next = deferred<SendMessageResult>()
+  vi.mocked(bridge.sendMessage).mockReturnValueOnce(next.promise)
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '继续聊聊' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledTimes(2))
+  const [control, normal] = vi.mocked(bridge.sendMessage).mock.calls.map(call => call[0])
+  expect(normal.requestId).not.toBe(control.requestId)
+  fireEvent.click(screen.getByRole('button', { name: '停止生成' }))
+  await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith(normal.requestId))
+})
+
+it('terminal control preserves an already running source request until its genuine completion', async () => {
+  backendActiveRequest = { requestId: 'real-running', conversationId: conversation.id }
+  vi.mocked(bridge.sendMessage).mockResolvedValueOnce(terminalControlResult(conversation.id))
+  await openApp()
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '先别发' } })
+  fireEvent.keyDown(screen.getByLabelText('消息'), { key: 'Enter', code: 'Enter' })
+  await screen.findByText('Her 状态：相关后续动作已暂缓。')
+  fireEvent.click(screen.getByRole('button', { name: '停止生成' }))
+  await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith('real-running'))
+  expect(screen.getByRole('button', { name: '停止生成' })).toBeTruthy()
+  act(() => emitRequest({ ...backendActiveRequest!, state: 'cancelled' }))
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+})
+
+it('terminal control resolves after navigation without changing daily or resurrecting a hidden request', async () => {
+  const control = deferred<SendMessageResult>()
+  vi.mocked(bridge.sendMessage).mockReturnValueOnce(control.promise)
+  await openApp()
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '先别发' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledOnce())
+  await userEvent.click(screen.getByRole('button', { name: '日常' }))
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '日常新草稿' } })
+  await act(async () => control.resolve(terminalControlResult(conversation.id)))
+  expect(screen.queryByText('Her 状态：相关后续动作已暂缓。')).toBeNull()
+  expect((screen.getByLabelText('消息') as HTMLTextAreaElement).value).toBe('日常新草稿')
+  await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+  await userEvent.click(screen.getByRole('button', { name: conversation.title }))
+  expect(screen.queryByRole('button', { name: '停止生成' })).toBeNull()
+  expect(screen.queryByText('正在连接模型…')).toBeNull()
+})
+
+it.each([false, true])('terminal control cannot finish a newer request when the original view is stale: %s', async navigate => {
+  const control = deferred<SendMessageResult>()
+  vi.mocked(bridge.sendMessage).mockReturnValueOnce(control.promise)
+  await openApp()
+  fireEvent.change(screen.getByLabelText('消息'), { target: { value: '先别发' } })
+  fireEvent.click(screen.getByRole('button', { name: '发送' }))
+  await waitFor(() => expect(bridge.sendMessage).toHaveBeenCalledOnce())
+  if (navigate) {
+    await userEvent.click(screen.getByRole('button', { name: '日常' }))
+    await userEvent.click(screen.getByRole('button', { name: '一起在做的事' }))
+    await userEvent.click(screen.getByRole('button', { name: conversation.title }))
+  }
+  act(() => emitRequest({ conversationId: conversation.id, requestId: 'new-real-request', state: 'started' }))
+  await act(async () => control.resolve(terminalControlResult(conversation.id)))
+  expect(screen.getByRole('button', { name: '停止生成' })).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: '停止生成' }))
+  await waitFor(() => expect(bridge.cancelMessage).toHaveBeenCalledWith('new-real-request'))
+})
+
+it('pending publication refreshes selected owner controls without a task event', async () => {
+  vi.mocked(bridge.selectWorkspace).mockImplementation(async selection => {
+    const value = await snapshot(selection)
+    if (selection.section === 'work' && value.conversation) value.topic = { conversationId: value.conversation.id, kind: 'work', shareProgress: false, shareRevision: 1 }
+    return value
+  })
+  await openApp()
+  await screen.findByRole('region', { name: '原话题委托卡' })
+  expect(screen.queryByLabelText('原话题控制确认')).toBeNull()
+  vi.mocked(bridge.getDelegationDetails).mockResolvedValue({ conversationId: conversation.id, delegations: [], scopes: [], controls: [{
+    id: 'terminal-control', revision: 2, kind: 'pause', effect: 'mutation', candidates: []
+  }] })
+  act(() => emitPending([{ id: 'opaque-control-notice', status: 'paused', version: 2 }]))
+  expect(await screen.findByLabelText('原话题控制确认')).toBeTruthy()
 })

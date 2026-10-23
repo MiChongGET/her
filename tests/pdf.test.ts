@@ -17,7 +17,7 @@ async function setup() {
   const store = new HerStore(join(root, 'db')); cleanup.push(() => store.close())
   const files = new FileAccessService(store)
   const controller = new AbortController()
-  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'run', callId: 'call', signal: controller.signal, modelSupportsVision: true }
+  const context = { conversationId: (() => { const id = randomUUID(); store.createConversation(id, randomUUID(), 't'); return id })(), runId: 'run', callId: 'call', authorize: async () => {}, signal: controller.signal, modelSupportsVision: true }
   const path = join(root, 'mixed.pdf'); await writeFile(path, await readFile('tests/fixtures/documents/mixed.pdf'))
   const [grant] = await files.grant([path], { kind: 'file', scope: 'conversation', conversationId: context.conversationId })
   const file = await files.reference(grant.id, '', context)

@@ -11,7 +11,7 @@ async function server(scenario: Scenario | Scenario[], options: Parameters<typeo
   const s = await startFixtureServer('openai', scenario, options); cleanup.push(s.close); return s
 }
 async function profile(f: ReturnType<typeof harness>, baseUrl: string) {
-  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  return f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
 }
 function gated() {
   let release!: () => void

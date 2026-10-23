@@ -5,7 +5,7 @@ import McpSettingsPanel from '../src/renderer/src/McpSettingsPanel'
 import { PRESETS } from '../src/core/mcp/presets'
 import type { HerApi, McpPreset } from '../src/shared/types'
 afterEach(cleanup)
-it('shows each preset environment default and explains when no extra variables are needed', async () => {
+it('shows each MCP preset environment default without offering a browser MCP preset', async () => {
   window.her = { listMcpServices: async () => [], listMcpPresets: async () => PRESETS } as unknown as HerApi
   render(<McpSettingsPanel />)
   const defaults = await screen.findByRole('table', { name: '预设默认环境变量' })
@@ -20,9 +20,7 @@ it('shows each preset environment default and explains when no extra variables a
     const row = within(defaults).getByText(key).closest('tr')!
     expect(within(row).getByText(value)).toBeTruthy()
   }
-  fireEvent.change(screen.getByLabelText('预设'), { target: { value: 'playwright' } })
-  expect(screen.queryByRole('table', { name: '预设默认环境变量' })).toBeNull()
-  expect(screen.getByText('此预设无需额外环境变量。')).toBeTruthy()
+  expect(screen.queryByRole('option', { name: /Playwright|ego lite/ })).toBeNull()
 })
 
 it('shows actual saved environment values in plain text and preserves drafts when values and preset metadata arrive late', async () => {
@@ -95,4 +93,20 @@ it('adds a verified document preset from MarkItDown readiness and explains its e
   await waitFor(() => expect(screen.getByRole('button', { name: '文档读取 · 已启用' })).toBeTruthy())
   expect(create).toHaveBeenCalledWith('markitdown')
   expect(screen.getByText(/文档解析仅供已授权文件使用/)).toBeTruthy()
+})
+
+it('links to the official ego-browser skill instead of offering a browser MCP preset', async () => {
+  const openExternal = vi.fn(async () => {})
+  window.her = { listMcpServices: async () => [], listMcpPresets: async () => PRESETS, openExternal } as unknown as HerApi
+  render(<McpSettingsPanel />)
+  fireEvent.click(await screen.findByRole('button', { name: '查看官方 ego-browser Skill' }))
+  await waitFor(() => expect(openExternal).toHaveBeenCalledWith('https://github.com/citrolabs/ego-lite/tree/main/skills/ego-browser'))
+  expect(screen.queryByRole('option', { name: /Playwright|ego lite/ })).toBeNull()
+})
+it('explains that saved Playwright presets were removed without replacing their configuration', async () => {
+  const service = { id: 'old', name: '旧浏览器', enabled: true, revision: 1, transport: 'stdio' as const, command: '/old/node', args: ['--extension'], secretKeys: [], hasSecrets: false, presetId: 'playwright' }
+  window.her = { listMcpServices: async () => [service], listMcpPresets: async () => PRESETS, getMcpStatus: async () => ({ serviceId: 'old', revision: 1, state: 'disconnected', toolCount: 0 }) } as unknown as HerApi
+  render(<McpSettingsPanel />)
+  expect(await screen.findByText(/Playwright 预设已移除/)).toBeTruthy()
+  expect((screen.getByLabelText('可执行命令') as HTMLInputElement).value).toBe('/old/node')
 })

@@ -1,0 +1,15 @@
+{
+  "runtime": {
+    "packaged": true,
+    "resourcesPath": "/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources",
+    "electron": "44.7.0",
+    "appPath": "/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources/app"
+  },
+  "generatedInstallCommand": "mkdir -p \"$HOME/.local/share/her/dependencies/web-tools-v1\" &&\ncp '/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources/mcp-web-dependencies/package.json' '/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources/mcp-web-dependencies/package-lock.json' \"$HOME/.local/share/her/dependencies/web-tools-v1/\" &&\ncd \"$HOME/.local/share/her/dependencies/web-tools-v1\" &&\nPLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --ignore-scripts &&\nnode '/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources/mcp-web-dependencies/apply-her-patch.mjs' \"$HOME/.local/share/her/dependencies/web-tools-v1/node_modules/open-websearch\"",
+  "executedPackagedPatch": "/Users/michong/work/her/release/Her-darwin-arm64/Her.app/Contents/Resources/mcp-web-dependencies/apply-her-patch.mjs",
+  "result": "her-request-confinement-v1",
+  "originalTreeUnchanged": "e4f65c6b7244abe3257142a7b473ba0d6e50d65f56520397826cc6d56d049b03",
+  "ownedPatchedTree": "b8d9e106bc30e4877acbdea464cc333f3fac49e6794e4c0b2cff190493796598",
+  "fullNetworkInstaller": "not executed; generated locked recipe and actual packaged patch on owned verified upstream copy checked",
+  "osPermissionChanges": false
+}

@@ -38,7 +38,7 @@ function validate(input: SaveMcpServiceInput): SaveMcpServiceInput {
   }
   if (input.id !== undefined && (!validString(input.id, 128) || !input.id)) throw new Error('MCP 服务标识不正确。')
   if (input.presetId !== undefined && (!validString(input.presetId, 128) || !input.presetId)) throw new Error('MCP 预设标识不正确。')
-  if (input.allowAllOperations !== undefined && typeof input.allowAllOperations !== 'boolean') throw new Error('MCP 自动操作开关必须为布尔值。')
+  if ('allowAllOperations' in input) throw new Error('MCP 全局自动操作开关已取消。')
   if (input.expectedRevision !== undefined && (!input.id || !Number.isSafeInteger(input.expectedRevision) || input.expectedRevision < 1)) {
     throw new Error('MCP 配置版本不正确。')
   }
@@ -73,7 +73,6 @@ function validate(input: SaveMcpServiceInput): SaveMcpServiceInput {
   }
   return {
     ...transport, name: input.name.trim(), enabled: input.enabled,
-    ...(input.allowAllOperations !== undefined ? { allowAllOperations: input.allowAllOperations } : {}),
     ...(input.id !== undefined ? { id: input.id } : {}),
     ...(input.presetId !== undefined ? { presetId: input.presetId } : {}),
     ...(input.expectedRevision !== undefined ? { expectedRevision: input.expectedRevision } : {}),
@@ -87,7 +86,7 @@ export class McpConfigService {
 
   constructor(private readonly store: HerStore, private readonly codec: SecretCodec, readonly lifetime?: AbortSignal) {}
 
-  list(): McpServiceConfig[] { return this.store.listMcpServices().map(service => service.config) }
+  list(): McpServiceConfig[] { return this.store.listMcpServices().map(service => withoutLegacyGrant(service.config)) }
 
   async getEnvironment(id: string, expectedRevision: number): Promise<Record<string, string>> {
     this.lifetime?.throwIfAborted()
@@ -128,7 +127,6 @@ export class McpConfigService {
     const { secretValues: _secretValues, clearSecretKeys: _clearSecretKeys, expectedRevision: _expectedRevision, ...fields } = input
     const config: McpServiceConfig = {
       ...fields, id: input.id ?? randomUUID(), revision: (previous?.config.revision ?? 0) + 1,
-      allowAllOperations: input.allowAllOperations ?? previous?.config.allowAllOperations ?? false,
       secretKeys, hasSecrets: secretKeys.length > 0
     }
     this.lifetime?.throwIfAborted()
@@ -150,7 +148,7 @@ export class McpConfigService {
     if (!service.config.enabled) throw new Error('MCP 服务已停用。')
     const secrets = await this.readSecrets(service)
     if (!this.isCurrent(id, service.config.revision)) throw conflict()
-    return { ...service.config, ...(service.config.transport === 'stdio' ? { env: secrets } : { headers: secrets }) }
+    return { ...withoutLegacyGrant(service.config), ...(service.config.transport === 'stdio' ? { env: secrets } : { headers: secrets }) }
   }
 
   isCurrent(id: string, revision: number): boolean {
@@ -180,4 +178,9 @@ export class McpConfigService {
       try { listener(change) } catch { /* consumer owns its connection cleanup */ }
     }
   }
+}
+
+function withoutLegacyGrant(config: McpServiceConfig): McpServiceConfig {
+  const { allowAllOperations: _retired, ...current } = config
+  return current
 }

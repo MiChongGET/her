@@ -8,8 +8,9 @@ import { dirname, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type {
   ProviderProtocol, ServiceModel, TestKind, ConnectionTestResult, ConversationSummary, TrashedConversation,
-  McpServiceConfig, FileGrant, FileReference, ChatMessage, DesktopSettings, ArtifactReference, DocumentReference, UnknownToolCall
+  McpServiceConfig, FileGrant, FileReference, ChatMessage, DesktopSettings, ArtifactReference, DocumentReference, UnknownToolCall, TopicInfo, MemoryRecord, MemoryScope, MemorySourceRef, MemorySourceDependencies, MemoryEntryBaseline
 } from '../../shared/types'
+import type { CompletionProof, Delegation, DelegationControl, DelegationDenial, DenialRevisionProof, PriorityControl, ActionDescriptor, UserIntent } from '../delegations/types'
 import { DocumentCache, DOCUMENT_CLEANUP_ERROR } from '../documents/cache'
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -57,6 +58,21 @@ export interface StoredConversation {
   piSessionId: string
   /** Last known entry ID from Pi, used for projection version tracking */
   lastEntryId: string | null
+}
+
+export interface StoredTopicHandoff {
+  operationId: string
+  previewId: string
+  digest: string
+  sourceConversationId: string
+  sourceSessionId: string
+  conversationId: string
+  piSessionId: string
+  receiverKey: string
+  excerpts: { messageId: string; role?: 'user' | 'assistant'; entryId: string; text: string; createdAt: string; contentDigest: string; sourceReceiverKey?: string }[]
+  status: 'preparing' | 'created' | 'failed'
+  errorCode: 'source-changed' | 'receiver-changed' | 'storage-failed' | null
+  piEntryId: string | null
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -218,6 +234,27 @@ export function untestedConnections(): Record<TestKind, ConnectionTestResult> {
   }
 }
 
+export interface StoredMemorySource {
+  ref: MemorySourceRef
+  dependencies: MemorySourceDependencies
+  shareRevision: number
+}
+
+/** Internal derived summary storage; creation/publication is wired by the memory producer later. */
+export interface StoredProgressSummary {
+  id: string
+  revision: number
+  conversationId: string
+  summary: string
+  feelingQuote?: string
+  sources: MemorySourceRef[]
+  expectedShareRevision: number
+}
+
+export const memorySourceKey = (ref: MemorySourceRef): string => JSON.stringify([ref.kind, ref.id, ref.revision, ref.conversationId, ref.sessionId ?? null, ref.entryId ?? null])
+const memorySourceIdentity = (ref: MemorySourceRef): string => JSON.stringify([ref.kind, ref.id, ref.conversationId, ref.sessionId ?? null, ref.entryId ?? null])
+const memoryConflict = () => new Error('记忆来源或版本已变化，请重新读取。')
+
 export class HerStore {
   private readonly db: DatabaseSync
   readonly artifactDirectory: string
@@ -239,6 +276,103 @@ export class HerStore {
     // Keep the v1 grant authority (identity/kind/revision) used by FileAccessService.
     const grantColumns = this.db.prepare('PRAGMA table_info(file_grants)').all() as { name: string }[]
     if (!grantColumns.some(column => column.name === 'data')) this.db.exec('ALTER TABLE file_grants ADD COLUMN data TEXT')
+    const conversationColumns = this.db.prepare('PRAGMA table_info(conversations)').all() as { name: string }[]
+    if (!conversationColumns.some(column => column.name === 'initial_title_request_id')) this.db.exec('ALTER TABLE conversations ADD COLUMN initial_title_request_id TEXT')
+    // Additive v1 cleanup tracking, explicitly approved for Her-Pi-v1 on 2026-10-20.
+    this.db.exec(`CREATE TABLE IF NOT EXISTS purge_jobs (
+      conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+      error TEXT
+    )`)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_topics (
+        conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK(kind IN ('daily', 'work')),
+        share_progress INTEGER NOT NULL CHECK(share_progress IN (0, 1)),
+        share_revision INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS companion_workspace (
+        id INTEGER PRIMARY KEY CHECK(id = 1),
+        daily_conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL
+      );
+    `)
+    this.db.exec(`CREATE TABLE IF NOT EXISTS topic_handoffs (
+      operation_id TEXT PRIMARY KEY,
+      preview_id TEXT NOT NULL,
+      digest TEXT NOT NULL,
+      source_conversation_id TEXT NOT NULL,
+      source_session_id TEXT NOT NULL,
+      target_conversation_id TEXT NOT NULL UNIQUE,
+      pi_session_id TEXT NOT NULL,
+      receiver_key TEXT NOT NULL,
+      excerpts TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('preparing', 'created', 'failed')),
+      error_code TEXT,
+      pi_entry_id TEXT
+    )`)
+    this.db.exec('CREATE UNIQUE INDEX IF NOT EXISTS topic_handoffs_preview_id ON topic_handoffs(preview_id)')
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_intents (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS exact_message_consumptions (
+        intent_id TEXT PRIMARY KEY REFERENCES user_intents(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL, call_id TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS delegations (
+        id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL, data TEXT NOT NULL, proof TEXT
+      );
+      CREATE TABLE IF NOT EXISTS delegation_controls (
+        id TEXT PRIMARY KEY, intent_id TEXT NOT NULL UNIQUE REFERENCES user_intents(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL, data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS delegation_runs (
+        run_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE, scope_revision INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS delegation_inputs (
+        request_id TEXT PRIMARY KEY, intent_id TEXT NOT NULL REFERENCES user_intents(id) ON DELETE CASCADE,
+        delegation_id TEXT REFERENCES delegations(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS delegation_denials (
+        id TEXT PRIMARY KEY, delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE,
+        scope_revision INTEGER NOT NULL, data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS priority_controls (
+        id TEXT PRIMARY KEY, intent_id TEXT NOT NULL UNIQUE REFERENCES user_intents(id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL, data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS delegation_action_facts (
+        delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE,
+        target_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(delegation_id, target_id)
+      );
+      CREATE TABLE IF NOT EXISTS delegation_http_evidence (
+        id TEXT PRIMARY KEY, delegation_id TEXT NOT NULL REFERENCES delegations(id) ON DELETE CASCADE,
+        scope_revision INTEGER NOT NULL, data TEXT NOT NULL
+      );
+    `)
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memories (
+        id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS memory_sources (
+        owner_key TEXT NOT NULL, position INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(owner_key, position)
+      );
+      CREATE TABLE IF NOT EXISTS memory_dependencies (
+        source_key TEXT PRIMARY KEY, data TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS memory_exclusions (
+        source_identity TEXT PRIMARY KEY
+      );
+      CREATE TABLE IF NOT EXISTS memory_baselines (
+        conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(conversation_id, session_id)
+      );
+      CREATE TABLE IF NOT EXISTS progress_summaries (
+        id TEXT NOT NULL, revision INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(id, revision)
+      );
+    `)
+    this.markDelegationsResumeRequired()
     this.recoverArtifactFiles()
     this.recoverDocumentFiles()
     this.db.exec(`CREATE TABLE IF NOT EXISTS file_references (
@@ -272,6 +406,7 @@ export class HerStore {
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
         title_custom INTEGER NOT NULL DEFAULT 0,
+        initial_title_request_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         deleted_at TEXT,
@@ -513,6 +648,190 @@ export class HerStore {
     `).run(id, title, now, now, piSessionId)
   }
 
+  ensureDailyConversation(): StoredConversation {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const pointer = this.db.prepare('SELECT daily_conversation_id FROM companion_workspace WHERE id = 1').get() as { daily_conversation_id: string | null } | undefined
+      const current = pointer?.daily_conversation_id ? this.getConversation(pointer.daily_conversation_id) : null
+      if (current && !current.deletedAt) {
+        this.db.exec('COMMIT')
+        return current
+      }
+      if (pointer?.daily_conversation_id) this.db.prepare("DELETE FROM conversation_topics WHERE conversation_id = ? AND kind = 'daily'").run(pointer.daily_conversation_id)
+      const id = randomUUID()
+      this.createConversation(id, randomUUID(), '日常')
+      this.db.prepare("INSERT INTO conversation_topics(conversation_id, kind, share_progress, share_revision) VALUES (?, 'daily', 0, 1)").run(id)
+      this.db.prepare('INSERT INTO companion_workspace(id, daily_conversation_id) VALUES (1, ?) ON CONFLICT(id) DO UPDATE SET daily_conversation_id = excluded.daily_conversation_id').run(id)
+      const daily = this.getConversation(id)!
+      this.db.exec('COMMIT')
+      return daily
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  createWorkConversation(id: string, piSessionId: string, title: string): TopicInfo {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.createConversation(id, piSessionId, title)
+      this.db.prepare("INSERT INTO conversation_topics(conversation_id, kind, share_progress, share_revision) VALUES (?, 'work', 1, 1)").run(id)
+      const topic = this.getTopicInfo(id)!
+      this.db.exec('COMMIT')
+      return topic
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  insertTopicHandoff(value: StoredTopicHandoff): void {
+    this.db.prepare(`INSERT INTO topic_handoffs
+      (operation_id, preview_id, digest, source_conversation_id, source_session_id, target_conversation_id, pi_session_id, receiver_key, excerpts, status, error_code, pi_entry_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(value.operationId, value.previewId, value.digest, value.sourceConversationId, value.sourceSessionId, value.conversationId,
+        value.piSessionId, value.receiverKey, JSON.stringify(value.excerpts), value.status, value.errorCode, value.piEntryId)
+  }
+
+  getTopicHandoff(operationId: string): StoredTopicHandoff | null {
+    const row = this.db.prepare('SELECT * FROM topic_handoffs WHERE operation_id = ?').get(operationId) as any
+    return row ? { operationId: row.operation_id, previewId: row.preview_id, digest: row.digest,
+      sourceConversationId: row.source_conversation_id, sourceSessionId: row.source_session_id, conversationId: row.target_conversation_id,
+      piSessionId: row.pi_session_id, receiverKey: row.receiver_key, excerpts: JSON.parse(row.excerpts),
+      status: row.status, errorCode: row.error_code, piEntryId: row.pi_entry_id } : null
+  }
+
+  getTopicHandoffForConversation(conversationId: string): StoredTopicHandoff | null {
+    const row = this.db.prepare('SELECT operation_id FROM topic_handoffs WHERE target_conversation_id = ?').get(conversationId) as { operation_id: string } | undefined
+    return row ? this.getTopicHandoff(row.operation_id) : null
+  }
+
+  listPreparingTopicHandoffs(): StoredTopicHandoff[] {
+    return (this.db.prepare("SELECT operation_id FROM topic_handoffs WHERE status = 'preparing'").all() as { operation_id: string }[])
+      .map(row => this.getTopicHandoff(row.operation_id)!)
+  }
+
+  finishTopicHandoff(operationId: string, status: 'created' | 'failed', errorCode: StoredTopicHandoff['errorCode'], piEntryId: string | null): void {
+    this.db.prepare("UPDATE topic_handoffs SET status = ?, error_code = ?, pi_entry_id = ? WHERE operation_id = ? AND status = 'preparing'")
+      .run(status, errorCode, piEntryId, operationId)
+  }
+
+  retryTopicHandoff(operationId: string): void {
+    this.db.prepare("UPDATE topic_handoffs SET status = 'preparing', error_code = NULL WHERE operation_id = ? AND status = 'failed' AND error_code = 'storage-failed'")
+      .run(operationId)
+  }
+
+  getTopicInfo(id: string): TopicInfo | null {
+    const row = this.db.prepare('SELECT conversation_id, kind, share_progress, share_revision FROM conversation_topics WHERE conversation_id = ?').get(id) as
+      { conversation_id: string; kind: TopicInfo['kind']; share_progress: number; share_revision: number } | undefined
+    return row ? { conversationId: row.conversation_id, kind: row.kind, shareProgress: row.share_progress === 1, shareRevision: row.share_revision } : null
+  }
+
+  listTopicInfo(): TopicInfo[] {
+    return (this.db.prepare('SELECT conversation_id FROM conversation_topics ORDER BY rowid').all() as { conversation_id: string }[])
+      .map(row => this.getTopicInfo(row.conversation_id)!)
+  }
+
+  getMemory(id: string): MemoryRecord | null {
+    const row = this.db.prepare('SELECT data FROM memories WHERE id = ? ORDER BY revision DESC LIMIT 1').get(id) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  getMemoryVersion(id: string, revision: number): MemoryRecord | null {
+    const row = this.db.prepare('SELECT data FROM memories WHERE id = ? AND revision = ?').get(id, revision) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  listMemories(scope: MemoryScope): MemoryRecord[] {
+    return (this.db.prepare('SELECT data FROM memories m WHERE revision = (SELECT MAX(revision) FROM memories WHERE id = m.id) ORDER BY rowid').all() as { data: string }[])
+      .map(row => JSON.parse(row.data) as MemoryRecord).filter(value => value.scope.kind === scope.kind &&
+        (scope.kind === 'personal' || (value.scope.kind === 'work' && value.scope.conversationId === scope.conversationId)))
+  }
+
+  /** Current version, source edges and exclusion tombstone commit together. Old content remains addressable. */
+  saveMemory(input: MemoryRecord, expectedRevision: number | null): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.getMemory(input.id)
+      if ((previous?.revision ?? null) !== expectedRevision || input.revision !== (expectedRevision ?? 0) + 1 || !input.sources.length ||
+          !input.id || !input.content.trim() || !Number.isFinite(Date.parse(input.validFrom)) ||
+          (input.validUntil !== undefined && !Number.isFinite(Date.parse(input.validUntil))) ||
+          !['active', 'superseded', 'excluded'].includes(input.status) || !['personal', 'work'].includes(input.scope.kind) ||
+          (previous && JSON.stringify(previous.scope) !== JSON.stringify(input.scope))) throw memoryConflict()
+      const conversationId = input.scope.kind === 'work' ? input.scope.conversationId : this.listTopicInfo().find(topic => topic.kind === 'daily')?.conversationId
+      const topic = conversationId && this.getTopicInfo(conversationId)
+      if (!topic || topic.kind !== (input.scope.kind === 'work' ? 'work' : 'daily')) throw memoryConflict()
+      const ref: MemorySourceRef = { kind: 'memory', id: input.id, revision: input.revision, conversationId: topic.conversationId }
+      this.saveMemorySource(ref, { memorySources: input.sources, fileSources: {} }, topic.shareRevision)
+      if (previous) this.db.prepare('UPDATE memories SET data = ? WHERE id = ? AND revision = ?')
+        .run(JSON.stringify({ ...previous, status: previous.status === 'excluded' ? 'excluded' : 'superseded', validUntil: input.validFrom }), previous.id, previous.revision)
+      this.db.prepare('INSERT INTO memories(id, revision, data) VALUES (?, ?, ?)').run(input.id, input.revision, JSON.stringify(input))
+      this.saveMemoryEdges(ref, input.sources)
+      if (input.status === 'excluded') this.excludeMemorySource(ref)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  getMemorySource(ref: MemorySourceRef): StoredMemorySource | null {
+    const row = this.db.prepare('SELECT data FROM memory_dependencies WHERE source_key = ?').get(memorySourceKey(ref)) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  /** Host-only provenance registration. An existing identity/version can never acquire different dependencies. */
+  saveMemorySource(ref: MemorySourceRef, dependencies: MemorySourceDependencies, shareRevision: number): void {
+    const conversation = this.getConversation(ref.conversationId), topic = this.getTopicInfo(ref.conversationId)
+    if (!conversation || conversation.deletedAt || !topic || topic.shareRevision !== shareRevision || !ref.id ||
+        !Number.isSafeInteger(ref.revision) || ref.revision < 1 || !['pi-entry', 'memory', 'progress'].includes(ref.kind) ||
+        (ref.kind === 'pi-entry' ? !ref.entryId || ref.id !== ref.entryId || ref.sessionId !== conversation.piSessionId : ref.sessionId !== undefined || ref.entryId !== undefined)) throw memoryConflict()
+    const value: StoredMemorySource = { ref, dependencies, shareRevision }
+    const previous = this.getMemorySource(ref)
+    if (previous) { if (JSON.stringify(previous) !== JSON.stringify(value)) throw memoryConflict(); return }
+    this.db.prepare('INSERT INTO memory_dependencies(source_key, data) VALUES (?, ?)').run(memorySourceKey(ref), JSON.stringify(value))
+  }
+
+  private saveMemoryEdges(owner: MemorySourceRef, sources: MemorySourceRef[]): void {
+    sources.forEach((source, position) => this.db.prepare('INSERT INTO memory_sources(owner_key, position, data) VALUES (?, ?, ?)')
+      .run(memorySourceKey(owner), position, JSON.stringify(source)))
+  }
+
+  getMemorySources(owner: MemorySourceRef): MemorySourceRef[] {
+    return (this.db.prepare('SELECT data FROM memory_sources WHERE owner_key = ? ORDER BY position').all(memorySourceKey(owner)) as { data: string }[]).map(row => JSON.parse(row.data))
+  }
+
+  excludeMemorySource(ref: MemorySourceRef): void {
+    this.db.prepare('INSERT OR IGNORE INTO memory_exclusions(source_identity) VALUES (?)').run(memorySourceIdentity(ref))
+  }
+
+  isMemorySourceExcluded(ref: MemorySourceRef): boolean {
+    return !!this.db.prepare('SELECT 1 FROM memory_exclusions WHERE source_identity = ?').get(memorySourceIdentity(ref))
+  }
+
+  saveMemoryBaseline(value: MemoryEntryBaseline): void {
+    const conversation = this.getConversation(value.conversationId)
+    if (!conversation || conversation.deletedAt || !this.getTopicInfo(value.conversationId) || conversation.piSessionId !== value.sessionId) throw memoryConflict()
+    this.db.prepare('INSERT INTO memory_baselines(conversation_id, session_id, data) VALUES (?, ?, ?)')
+      .run(value.conversationId, value.sessionId, JSON.stringify(value))
+  }
+
+  getMemoryBaseline(conversationId: string, sessionId: string): MemoryEntryBaseline | null {
+    const row = this.db.prepare('SELECT data FROM memory_baselines WHERE conversation_id = ? AND session_id = ?').get(conversationId, sessionId) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  getProgressSummary(id: string): StoredProgressSummary | null {
+    const row = this.db.prepare('SELECT data FROM progress_summaries WHERE id = ? ORDER BY revision DESC LIMIT 1').get(id) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  saveProgressSummary(input: StoredProgressSummary, expectedRevision: number | null): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.getProgressSummary(input.id), topic = this.getTopicInfo(input.conversationId)
+      if (!topic || topic.kind !== 'work' || !topic.shareProgress || topic.shareRevision !== input.expectedShareRevision ||
+          (previous?.revision ?? null) !== expectedRevision || input.revision !== (expectedRevision ?? 0) + 1 ||
+          !input.id || !input.summary.trim() || !input.sources.length || (previous && previous.conversationId !== input.conversationId)) throw memoryConflict()
+      const ref: MemorySourceRef = { kind: 'progress', id: input.id, revision: input.revision, conversationId: input.conversationId }
+      this.saveMemorySource(ref, { memorySources: input.sources, fileSources: {} }, input.expectedShareRevision)
+      this.db.prepare('INSERT INTO progress_summaries(id, revision, data) VALUES (?, ?, ?)').run(input.id, input.revision, JSON.stringify(input))
+      this.saveMemoryEdges(ref, input.sources)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
   getConversation(id: string): StoredConversation | null {
     const row = this.db.prepare('SELECT * FROM conversations WHERE id = ?').get(id) as any
     if (!row) return null
@@ -610,6 +929,15 @@ export class HerStore {
       .run(title, custom ? 1 : 0, now, id)
   }
 
+  setInitialTopicTitle(conversationId: string, requestId: string, text: string): void {
+    const title = Array.from(text.replace(/\s+/gu, ' ').trim()).slice(0, 24).join('')
+    if (!title) return
+    this.db.prepare(`UPDATE conversations SET title = ?, initial_title_request_id = ?
+      WHERE id = ? AND deleted_at IS NULL AND title_custom = 0 AND initial_title_request_id IS NULL
+        AND EXISTS (SELECT 1 FROM conversation_topics WHERE conversation_id = ? AND kind = 'work')`)
+      .run(title, requestId, conversationId, conversationId)
+  }
+
   trashConversation(id: string): void {
     const now = new Date().toISOString()
     this.db.prepare('UPDATE conversations SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
@@ -617,6 +945,7 @@ export class HerStore {
 
   /** Viewing only: a restored conversation never resumes its queue or old approvals by itself. */
   restoreConversation(id: string): ConversationSummary {
+    if (this.db.prepare('SELECT 1 FROM purge_jobs WHERE conversation_id = ?').get(id)) throw new Error('此对话正在永久清理，不能恢复，请重试清理。')
     const now = new Date().toISOString()
     const result = this.db.prepare('UPDATE conversations SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at IS NOT NULL').run(now, id)
     if (!result.changes) throw new Error('该对话不在回收站中。')
@@ -625,12 +954,35 @@ export class HerStore {
 
   listTrashedConversations(): TrashedConversation[] {
     const rows = this.db.prepare('SELECT * FROM conversations WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC, rowid DESC').all() as any[]
-    return rows.map(row => ({ ...this.conversationSummary(this.conversationFromRow(row)), deletedAt: row.deleted_at }))
+    return rows.map(row => {
+      const job = this.db.prepare('SELECT error FROM purge_jobs WHERE conversation_id = ?').get(row.id) as { error: string | null } | undefined
+      return { ...this.conversationSummary(this.conversationFromRow(row)), deletedAt: row.deleted_at, ...(job ? { cleanupPending: true, cleanupError: job.error ?? undefined } : {}) }
+    })
   }
 
   private conversationSummary(conversation: StoredConversation): ConversationSummary {
     return { id: conversation.id, title: conversation.title, titleCustom: conversation.titleCustom,
       createdAt: conversation.createdAt.toISOString(), updatedAt: conversation.updatedAt.toISOString(), lastMessage: '' }
+  }
+
+  beginPurge(ids: string[]): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const id of ids) {
+        if (!this.db.prepare('SELECT 1 FROM conversations WHERE id = ? AND deleted_at IS NOT NULL').get(id)) throw new Error('只能永久删除回收站中的对话。')
+      }
+      for (const id of ids) this.db.prepare('INSERT INTO purge_jobs(conversation_id) VALUES (?) ON CONFLICT DO NOTHING').run(id)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  listPurgeJobs(): { conversationId: string; error: string | null }[] {
+    return (this.db.prepare('SELECT conversation_id, error FROM purge_jobs').all() as { conversation_id: string; error: string | null }[])
+      .map(row => ({ conversationId: row.conversation_id, error: row.error }))
+  }
+
+  failPurge(id: string): void {
+    this.db.prepare('UPDATE purge_jobs SET error = ? WHERE conversation_id = ?').run('清理未完成，请重试。', id)
   }
 
   purgeConversation(id: string): void {
@@ -659,7 +1011,12 @@ export class HerStore {
       this.removeDocumentFiles(documents, true)
       this.removeArtifactFiles(artifacts, true)
       for (const id of ids) {
-        this.db.prepare('DELETE FROM target_quarantine WHERE conversation_id = ?').run(id)
+        // Keep a content-free intent tombstone so replay cannot recreate a permanently deleted work topic.
+        for (const control of this.listDelegationControls().filter(value => value.conversationId === id)) {
+          this.updateDelegationControl({ ...control, status: 'rejected', revision: control.revision + 1,
+            proposal: { id: control.id, revision: control.revision + 1, evidenceSpans: [],
+              scope: { purpose: '', objects: [], completion: '', allowedCapabilities: [], origins: [], constraints: {} } } }, control.revision)
+        }
         this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id)
       }
       this.db.exec('COMMIT')
@@ -677,12 +1034,17 @@ export class HerStore {
   // ──────────────────────────────────────────────────────────────────────────────
 
   enqueueInput(conversationId: string, content: string, attachments: any[] | null, id: string = randomUUID(),
-    target: { profileId?: string; model?: string; userMessageId?: string } = {}): string {
+    target: { profileId?: string; model?: string; userMessageId?: string; initialTitleText?: string } = {}): string {
     const now = new Date().toISOString()
-    this.db.prepare(`
-      INSERT INTO input_requests (id, conversation_id, content, attachments, status, profile_id, model, user_message_id, created_at)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
-    `).run(id, conversationId, content, attachments ? JSON.stringify(attachments) : null, target.profileId ?? null, target.model ?? null, target.userMessageId ?? null, now)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.db.prepare(`
+        INSERT INTO input_requests (id, conversation_id, content, attachments, status, profile_id, model, user_message_id, created_at)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+      `).run(id, conversationId, content, attachments ? JSON.stringify(attachments) : null, target.profileId ?? null, target.model ?? null, target.userMessageId ?? null, now)
+      if (target.initialTitleText) this.setInitialTopicTitle(conversationId, id, target.initialTitleText)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
     return id
   }
 
@@ -766,11 +1128,287 @@ export class HerStore {
     }
   }
 
+  /** Trusted ingress only. Classification must be a later host decision. */
+  saveUserIntent(intent: UserIntent): void {
+    if (intent.source !== 'user' || intent.kind !== 'unclassified') throw new Error('用户依据不正确。')
+    this.db.prepare('INSERT INTO user_intents(id, conversation_id, data) VALUES (?, ?, ?)')
+      .run(intent.id, intent.conversationId, JSON.stringify(intent))
+  }
+
+  getUserIntent(id: string): UserIntent | null {
+    const row = this.db.prepare('SELECT data FROM user_intents WHERE id = ?').get(id) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  classifyUserIntent(id: string, kind: UserIntent['kind']): void {
+    this.db.prepare("UPDATE user_intents SET data = json_set(data, '$.kind', ?) WHERE id = ?").run(kind, id)
+  }
+
+  bindDelegationInput(requestId: string, intentId: string, delegationId: string | null = null): void {
+    this.db.prepare('INSERT INTO delegation_inputs(request_id, intent_id, delegation_id) VALUES (?, ?, ?)').run(requestId, intentId, delegationId)
+  }
+
+  getDelegationInput(requestId: string): { intentId: string; delegationId: string | null } | null {
+    return this.db.prepare('SELECT intent_id AS intentId, delegation_id AS delegationId FROM delegation_inputs WHERE request_id = ?').get(requestId) as { intentId: string; delegationId: string | null } | undefined ?? null
+  }
+
+  /** Only already-admitted unfinished inputs or a waiting scope; completed history is excluded. */
+  listPriorityCandidateIntentIds(): string[] {
+    return (this.db.prepare(`SELECT DISTINCT u.id FROM user_intents u
+      LEFT JOIN delegation_inputs b ON b.intent_id = u.id
+      LEFT JOIN input_requests i ON i.id = COALESCE(b.request_id, u.id)
+      LEFT JOIN delegation_controls c ON c.intent_id = u.id
+      WHERE json_extract(u.data, '$.kind') != 'control' AND
+        (i.status IN ('pending', 'running') OR json_extract(c.data, '$.status') = 'waiting')`).all() as { id: string }[]).map(row => row.id)
+  }
+
+  savePriorityControl(value: PriorityControl, expectedRevision?: number): void {
+    if (expectedRevision === undefined) this.db.prepare('INSERT INTO priority_controls(id, intent_id, revision, data) VALUES (?, ?, ?, ?)')
+      .run(value.id, value.intentId, value.revision, JSON.stringify(value))
+    else if (!this.db.prepare('UPDATE priority_controls SET revision = ?, data = ? WHERE id = ? AND revision = ?')
+      .run(value.revision, JSON.stringify(value), value.id, expectedRevision).changes) throw new Error('控制指令已变化。')
+  }
+
+  listPriorityControls(): PriorityControl[] {
+    return (this.db.prepare('SELECT data FROM priority_controls ORDER BY rowid').all() as { data: string }[]).map(row => JSON.parse(row.data))
+  }
+
+  /** Only compiled registry descriptions feed these private identity facts; no payload/body copies. */
+  saveDelegationActionFact(action: ActionDescriptor): void {
+    if (!action.delegationId || action.opaque || !action.targetId) return
+    this.db.prepare('INSERT OR REPLACE INTO delegation_action_facts(delegation_id, target_id, data) VALUES (?, ?, ?)')
+      .run(action.delegationId, action.targetId, JSON.stringify({ delegationId: action.delegationId, scopeRevision: action.scopeRevision,
+        targetId: action.targetId, target: action.target, effect: action.effect, businessEffect: action.businessEffect }))
+  }
+
+  listDelegationActionFacts(): Pick<ActionDescriptor, 'delegationId' | 'scopeRevision' | 'targetId' | 'target' | 'effect' | 'businessEffect'>[] {
+    return (this.db.prepare('SELECT data FROM delegation_action_facts').all() as { data: string }[]).map(row => JSON.parse(row.data))
+  }
+
+  /** All selected lifecycle changes and candidate releases are one conditional write. */
+  resolvePriorityControl(control: PriorityControl, expectedRevision: number, changes: Delegation[]): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const value of changes) this.updateDelegation(value, value.revision - 1)
+      this.savePriorityControl(control, expectedRevision)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  getDelegationResumeControls(id: string): { id: string; revision: number }[] {
+    const owner = this.getDelegation(id)?.conversationId
+    return this.listPriorityControls().filter(control => control.kind === 'pause' && control.effect === 'all' &&
+      (control.status === 'resolved' || (control.status === 'waiting' && owner && control.ownerResolutions?.[owner] === 'pause')) &&
+      control.heldIntentIds.some(intentId => this.getIntentControl(intentId)?.delegationId === id))
+      .map(control => ({ id: control.id, revision: control.revision })).sort((a, b) => a.id.localeCompare(b.id))
+  }
+
+  assertDelegationResumeControls(id: string, expected: { id: string; revision: number }[]): void {
+    if (JSON.stringify(this.getDelegationResumeControls(id)) !== JSON.stringify([...expected].sort((a, b) => a.id.localeCompare(b.id)))) throw new Error('暂停控制已变化，请重新核对原话题卡片。')
+  }
+
+  /** Resume and release only the selected delegation's already-resolved lifecycle holds, together. */
+  resumeDelegation(value: Delegation, expectedRevision: number, expectedControls: { id: string; revision: number }[]): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const current = this.getDelegation(value.id)
+      if (!current || current.revision !== expectedRevision || !['active', 'paused'].includes(current.status)) throw new Error('委托版本已变化。')
+      this.assertDelegationResumeControls(value.id, expectedControls)
+      this.updateDelegation(value, expectedRevision)
+      for (const expected of expectedControls) {
+        const control = this.listPriorityControls().find(control => control.id === expected.id)!
+        this.savePriorityControl({ ...control, revision: control.revision + 1,
+          heldIntentIds: control.heldIntentIds.filter(intentId => this.getIntentControl(intentId)?.delegationId !== value.id) }, expected.revision)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  insertDelegation(value: Delegation): void {
+    this.db.prepare('INSERT INTO delegations(id, conversation_id, revision, data) VALUES (?, ?, ?, ?)')
+      .run(value.id, value.conversationId, value.revision, JSON.stringify(value))
+  }
+
+  saveDelegationDenial(value: DelegationDenial): void {
+    this.db.prepare('INSERT INTO delegation_denials (id, delegation_id, scope_revision, data) VALUES (?, ?, ?, ?)')
+      .run(value.id, value.delegationId, value.scopeRevision, JSON.stringify(value))
+  }
+
+  listDelegationDenials(delegationId: string): DelegationDenial[] {
+    return (this.db.prepare('SELECT id, scope_revision, data FROM delegation_denials WHERE delegation_id = ? ORDER BY rowid').all(delegationId) as { id: string; scope_revision: number; data: string }[])
+      .map(row => ({ ...JSON.parse(row.data), id: row.id, delegationId, scopeRevision: row.scope_revision }))
+  }
+
+  /** Evidence consumption, refusal withdrawal and runtime invalidation commit together. */
+  reviseDelegationDenial(value: Delegation, expectedRevision: number, denial: DelegationDenial, proof: DenialRevisionProof): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (this.db.prepare("SELECT 1 FROM delegation_denials WHERE json_extract(data, '$.withdrawal.intentId') = ?").get(proof.intentId)) throw new Error('这条用户依据已使用。')
+      const row = this.db.prepare('SELECT data FROM delegation_denials WHERE id = ? AND delegation_id = ?').get(denial.id, value.id) as { data: string } | undefined
+      if (!row || JSON.parse(row.data).withdrawal) throw new Error('拒绝记录已变化。')
+      this.db.prepare('UPDATE delegation_denials SET data = ? WHERE id = ?').run(JSON.stringify({ ...denial, withdrawal: proof }), denial.id)
+      this.updateDelegation(value, expectedRevision)
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  saveHttpEvidence(value: import('../delegations/http-comparison').HttpEvidence): void {
+    this.db.prepare('INSERT INTO delegation_http_evidence (id, delegation_id, scope_revision, data) VALUES (?, ?, ?, ?)')
+      .run(value.id, value.delegationId, value.scopeRevision, JSON.stringify(value))
+  }
+
+  listHttpEvidence(delegationId: string, revision: number): import('../delegations/http-comparison').HttpEvidence[] {
+    return (this.db.prepare('SELECT data FROM delegation_http_evidence WHERE delegation_id = ? AND scope_revision = ? ORDER BY rowid').all(delegationId, revision) as { data: string }[])
+      .map(row => JSON.parse(row.data))
+  }
+
+  deleteHttpEvidence(id: string): void {
+    this.db.prepare('DELETE FROM delegation_http_evidence WHERE id = ?').run(id)
+  }
+
+  getDelegation(id: string): Delegation | null {
+    const row = this.db.prepare('SELECT data FROM delegations WHERE id = ?').get(id) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  markDelegationsResumeRequired(): void {
+    this.db.exec("UPDATE delegations SET data = json_set(data, '$.resumeRequired', json('true')) WHERE json_extract(data, '$.status') IN ('active', 'paused')")
+  }
+
+  listDelegations(): Delegation[] {
+    return (this.db.prepare('SELECT data FROM delegations').all() as { data: string }[]).map(row => JSON.parse(row.data))
+  }
+
+  updateDelegation(value: Delegation, expectedRevision: number, proof?: CompletionProof): void {
+    const result = this.db.prepare('UPDATE delegations SET revision = ?, data = ?, proof = ? WHERE id = ? AND revision = ?')
+      .run(value.revision, JSON.stringify(value), proof ? JSON.stringify(proof) : null, value.id, expectedRevision)
+    if (!result.changes) throw new Error('委托版本已变化。')
+  }
+
+  /** Actual unresolved ledger identities for this delegation, including older bound runs. */
+  listDelegationUnknownEvidence(id: string): string[] {
+    return (this.db.prepare(`SELECT c.id FROM tool_calls c JOIN delegation_runs r ON r.run_id = c.task_id
+      WHERE r.delegation_id = ? AND c.status = 'unknown' AND c.resolution IS NULL ORDER BY c.created_at, c.rowid`).all(id) as { id: string }[]).map(row => row.id)
+  }
+
+  getDelegationProof(id: string): CompletionProof | null {
+    const row = this.db.prepare('SELECT proof FROM delegations WHERE id = ?').get(id) as { proof: string | null } | undefined
+    return row?.proof ? JSON.parse(row.proof) : null
+  }
+
+  insertDelegationControl(value: DelegationControl): void {
+    this.db.prepare('INSERT INTO delegation_controls(id, intent_id, revision, data) VALUES (?, ?, ?, ?)')
+      .run(value.id, value.intentId, value.revision, JSON.stringify(value))
+  }
+
+  getDelegationControl(id: string): DelegationControl | null {
+    const row = this.db.prepare('SELECT data FROM delegation_controls WHERE id = ?').get(id) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  getIntentControl(intentId: string): DelegationControl | null {
+    const row = this.db.prepare('SELECT data FROM delegation_controls WHERE intent_id = ?').get(intentId) as { data: string } | undefined
+    return row ? JSON.parse(row.data) : null
+  }
+
+  /** Known ordinary work input only; a future scope candidate is not an owned delegation yet. */
+  getOrdinaryWorkInputOwner(intentId: string): string | undefined {
+    if (this.getIntentControl(intentId)) return undefined
+    const intent = this.getUserIntent(intentId), input = this.getInput(intentId)
+    return intent && input?.conversationId === intent.conversationId && this.getTopicInfo(intent.conversationId)?.kind === 'work' ? intent.conversationId : undefined
+  }
+
+  listDelegationControls(): DelegationControl[] {
+    return (this.db.prepare('SELECT data FROM delegation_controls').all() as { data: string }[]).map(row => JSON.parse(row.data))
+  }
+
+  updateDelegationControl(value: DelegationControl, expectedRevision: number): void {
+    const result = this.db.prepare('UPDATE delegation_controls SET revision = ?, data = ? WHERE id = ? AND revision = ?')
+      .run(value.revision, JSON.stringify(value), value.id, expectedRevision)
+    if (!result.changes) throw new Error('范围候选已变化。')
+  }
+
+  /** Scope grant and its idempotency record commit together. */
+  approveDelegationControl(control: DelegationControl, delegation: Delegation): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      this.insertDelegation(delegation)
+      this.updateDelegationControl({ ...control, status: 'approved', delegationId: delegation.id }, control.revision)
+      this.classifyUserIntent(control.intentId, 'delegate')
+      // Materialize only a descendant of an input frozen before the priority control arrived.
+      for (const priority of this.listPriorityControls().filter(value => value.candidateIntentIds?.includes(control.intentId))) {
+        const held = priority.heldIntentIds?.includes(control.intentId)
+        const ownerResolutions = { ...priority.ownerResolutions }
+        if (held) delete ownerResolutions[delegation.conversationId]
+        this.savePriorityControl({ ...priority, revision: priority.revision + 1,
+          ...(held ? { status: 'waiting' as const, ownerResolutions, selection: undefined } : {}),
+          candidates: [...priority.candidates, { delegationId: delegation.id, revision: delegation.revision }],
+          heldDelegationIds: held ? [...priority.heldDelegationIds, delegation.id] : priority.heldDelegationIds }, priority.revision)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  claimDelegationDispatch(id: string): boolean {
+    return !!this.db.prepare("UPDATE delegation_controls SET data = json_set(data, '$.dispatch', 'claimed') WHERE id = ? AND json_extract(data, '$.dispatch') = 'pending' AND json_extract(data, '$.status') = 'approved'").run(id).changes
+  }
+
+  setDelegationDispatch(id: string, state: DelegationControl['dispatch']): void {
+    this.db.prepare("UPDATE delegation_controls SET data = json_set(data, '$.dispatch', ?) WHERE id = ?").run(state, id)
+  }
+
+  /** A pre-run failure must be durable before publishing the failure/pending notification. */
+  failDelegationAdmission(requestId: string): boolean {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const row = this.db.prepare("SELECT data FROM delegation_controls WHERE json_extract(data, '$.requestId') = ?").get(requestId) as { data: string } | undefined
+      const control: DelegationControl | undefined = row && JSON.parse(row.data)
+      if (!control || control.status !== 'approved' || control.dispatch !== 'claimed' || !control.delegationId || this.getTaskByRequest(requestId)) {
+        this.db.exec('COMMIT')
+        return false
+      }
+      this.updateDelegationControl({ ...control, dispatch: 'failed' }, control.revision)
+      const delegation = this.getDelegation(control.delegationId)
+      if (delegation?.status === 'active') this.updateDelegation({ ...delegation, status: 'paused', revision: delegation.revision + 1 }, delegation.revision)
+      this.db.exec('COMMIT')
+      return true
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
+  }
+
+  attachDelegationRun(id: string, runId: string, revision: number): void {
+    this.db.prepare('INSERT INTO delegation_runs(run_id, delegation_id, scope_revision) VALUES (?, ?, ?)').run(runId, id, revision)
+  }
+
+  getDelegationForRun(runId: string): Delegation | null {
+    const row = this.getDelegationRun(runId)
+    return row ? this.getDelegation(row.delegationId) : null
+  }
+
+  getLatestDelegationTask(id: string): StoredTask | null {
+    const row = this.db.prepare('SELECT t.id FROM tasks t JOIN delegation_runs d ON d.run_id = t.id WHERE d.delegation_id = ? ORDER BY t.created_at DESC, t.rowid DESC LIMIT 1').get(id) as { id: string } | undefined
+    return row ? this.getTask(row.id) : null
+  }
+
+  getDelegationRun(runId: string): { delegationId: string; scopeRevision: number } | null {
+    return this.db.prepare('SELECT delegation_id AS delegationId, scope_revision AS scopeRevision FROM delegation_runs WHERE run_id = ?').get(runId) as { delegationId: string; scopeRevision: number } | undefined ?? null
+  }
+
   // ──────────────────────────────────────────────────────────────────────────────
   // Task operations
   // ──────────────────────────────────────────────────────────────────────────────
 
-  createTask(task: Omit<StoredTask, 'createdAt' | 'startedAt' | 'endedAt' | 'continuationOf' | 'assistantMessageId'> & { continuationOf?: string | null; assistantMessageId?: string | null }): void {
+  createTask(task: Omit<StoredTask, 'createdAt' | 'startedAt' | 'endedAt' | 'continuationOf' | 'assistantMessageId'> & { continuationOf?: string | null; assistantMessageId?: string | null }, association?: { delegationId: string; scopeRevision: number }): void {
+    if (association) {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        const delegation = this.getDelegation(association.delegationId)
+        if (!delegation || delegation.conversationId !== task.conversationId || delegation.status !== 'active' || delegation.resumeRequired || delegation.revision !== association.scopeRevision) throw new Error('委托范围已失效。')
+        this.createTask(task)
+        this.attachDelegationRun(delegation.id, task.id, association.scopeRevision)
+        this.db.exec('COMMIT')
+        return
+      } catch (error) { this.db.exec('ROLLBACK'); throw error }
+    }
     const now = new Date().toISOString()
     this.db.prepare(`
       INSERT INTO tasks (id, conversation_id, request_id, generation, status, service_id, model_id, config_revision, created_at, continuation_of, assistant_message_id)
@@ -832,6 +1470,26 @@ export class HerStore {
     this.db.prepare(`INSERT INTO tool_calls (id, task_id, call_id, tool_name, arguments, effect, target, status, dispatch_phase, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 'none', ?)`)
       .run(randomUUID(), row.taskId, row.callId, row.toolName, row.args, row.effect, row.target, new Date().toISOString())
+  }
+
+  hasConsumedExactMessage(intentId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM exact_message_consumptions WHERE intent_id = ?').get(intentId)
+  }
+
+  /** The one-shot authority and the existing action ledger row commit together, or neither exists. */
+  consumeExactMessage(intentId: string, action: ActionDescriptor, call: { runId: string; callId: string; toolName: string; args: Record<string, unknown> }): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const task = this.getTask(call.runId), binding = task && this.getDelegationInput(task.requestId)
+      const run = this.getDelegationRun(call.runId), delegation = this.getDelegation(action.delegationId)
+      if (!task || task.status !== 'running' || task.conversationId !== action.conversationId || binding?.intentId !== intentId ||
+        binding.delegationId !== action.delegationId || run?.delegationId !== action.delegationId || run.scopeRevision !== action.scopeRevision ||
+        !delegation || delegation.status !== 'active' || delegation.resumeRequired || delegation.revision !== action.scopeRevision ||
+        action.intentId !== intentId || action.id !== call.callId || this.isTargetQuarantined(action.targetId)) throw new Error('消息运行或目标已失效。')
+      this.db.prepare('INSERT INTO exact_message_consumptions(intent_id, task_id, call_id) VALUES (?, ?, ?)').run(intentId, call.runId, call.callId)
+      this.insertToolCall({ taskId: call.runId, callId: call.callId, toolName: call.toolName, args: JSON.stringify(call.args), effect: action.effect, target: action.targetId })
+      this.db.exec('COMMIT')
+    } catch (error) { this.db.exec('ROLLBACK'); throw error }
   }
 
   updateToolCall(taskId: string, callId: string, patch: { status?: string; phase?: string; dispatched?: boolean; result?: string; error?: string }): void {
@@ -1091,7 +1749,7 @@ export class HerStore {
     const row = this.db.prepare('SELECT value FROM settings WHERE id = 1').get() as { value: string } | undefined
     return {
       activeProfileId: null, shortcut: 'CommandOrControl+Shift+H',
-      stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false,
+      stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false, appearance: 'light',
       ...(row ? JSON.parse(row.value) : {})
     }
   }

@@ -1,4 +1,5 @@
-import type { Model, ProviderStreams, StreamOptions, Tool, ToolCall } from '@earendil-works/pi-ai'
+import { randomUUID } from 'node:crypto'
+import type { Model, StreamOptions, Tool, ToolCall } from '@earendil-works/pi-ai'
 import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { ProfileService } from '../core/storage/profiles'
 import type { TestKind, ConnectionTestResult, RuntimeProvider } from '../shared/types'
@@ -15,11 +16,14 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
   const signal = lifetime ? AbortSignal.any([lifetime, deadline.signal]) : deadline.signal
   let failure = '模型流式请求失败，请检查已保存的地址、协议、模型和密钥。'
   try {
-    const adapter: ProviderStreams = provider.protocol === 'openai'
-      ? await import('@earendil-works/pi-ai/api/openai-completions')
-      : provider.protocol === 'anthropic'
-        ? await import('@earendil-works/pi-ai/api/anthropic-messages')
-        : await import('@earendil-works/pi-ai/api/openai-responses')
+    const { ModelRuntime } = await import('@earendil-works/pi-coding-agent')
+    const providerId = `her-${provider.id}`
+    const keyless = randomUUID()
+    const runtime = await ModelRuntime.create({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false, credentials: {
+      read: async id => id === providerId ? { type: 'api_key', key: provider.apiKey || keyless } : undefined,
+      list: async () => [{ providerId, type: 'api_key' }],
+      modify: async () => { throw new Error('凭据由 Her 管理。') }, delete: async () => { throw new Error('凭据由 Her 管理。') }
+    } })
     let tools: Tool[] | undefined
     if (kind === 'tools') {
       const { Type } = await import('@earendil-works/pi-ai')
@@ -27,7 +31,7 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
         parameters: Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }) }]
     }
     const model: Model<'openai-completions' | 'anthropic-messages' | 'openai-responses'> = {
-      id: provider.model, name: provider.model, provider: provider.id,
+      id: provider.model, name: provider.model, provider: providerId,
       // Anthropic's SDK appends /v1/messages; Her's saved API bases already include /v1.
       baseUrl: provider.protocol === 'anthropic' ? provider.baseUrl.replace(/\/v1\/?$/, '') : provider.baseUrl,
       api: provider.protocol === 'openai' ? 'openai-completions' : provider.protocol === 'anthropic' ? 'anthropic-messages' : 'openai-responses',
@@ -35,7 +39,8 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
     }
     // The SDK requires an API key even for keyless servers; this marker never leaves the host.
-    const keyless = 'her-local-connection-probe'
+    runtime.registerProvider(providerId, { api: model.api, baseUrl: model.baseUrl, models: [model] })
+    let terminal = provider.protocol !== 'openai'
     let normalEnd = false
     let anthropicStop = false
     const options: StreamOptions = {
@@ -62,7 +67,17 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
           await response.body?.cancel()
           throw new Error(failure)
         }
-        return response
+        if (provider.protocol !== 'openai' || !response.body) return response
+        const decoder = new TextDecoder()
+        let pending = ''
+        const observe = (text: string) => {
+          const lines = (pending + text).split('\n'); pending = lines.pop()!
+          if (lines.some(line => /^data:\s*\[DONE\]\s*$/.test(line))) terminal = true
+        }
+        return new Response(response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+          transform(chunk, controller) { observe(decoder.decode(chunk, { stream: true })); controller.enqueue(chunk) },
+          flush() { observe(decoder.decode() + '\n') }
+        })), { status: response.status, headers: response.headers })
       },
       onProviderStreamEvent(data) {
         if (!data || typeof data !== 'object') return
@@ -80,19 +95,18 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
     let completed = false
     let startedCalls = 0
     const calls: ToolCall[] = []
-    const requestOptions = {
-      ...options,
-      ...(kind === 'tools' ? { toolChoice: provider.protocol === 'openai'
-        ? { type: 'function', function: { name: TOOL_NAME } }
-        : { type: provider.protocol === 'anthropic' ? 'tool' : 'function', name: TOOL_NAME } } : {})
-    }
-    const stream = adapter.stream(model, normalizeContext({
+    const context = normalizeContext({
       messages: [{ role: 'user', content: kind === 'vision' ? [
         { type: 'text', text: '图片的主要颜色是什么？只回复一个英文大写颜色名。' },
         { type: 'image', mimeType: 'image/png', data: VISION_PNG }
       ] : kind === 'tools' ? '请调用 report_connection 工具，参数为 {"ok":true}，不要执行任何其他操作。' : '请只回复 OK。', timestamp: Date.now() }],
       ...(tools ? { tools } : {})
-    }), requestOptions)
+    })
+    const stream = provider.protocol === 'openai'
+      ? runtime.stream(model as Model<'openai-completions'>, context, { ...options, ...(kind === 'tools' ? { toolChoice: { type: 'function', function: { name: TOOL_NAME } } } : {}) })
+      : provider.protocol === 'anthropic'
+        ? runtime.stream(model as Model<'anthropic-messages'>, context, { ...options, ...(kind === 'tools' ? { toolChoice: { type: 'tool', name: TOOL_NAME } } : {}) })
+        : runtime.stream(model as Model<'openai-responses'>, context, { ...options, ...(kind === 'tools' ? { toolChoice: { type: 'function', name: TOOL_NAME } } : {}) })
     for await (const event of stream) {
       if (event.type === 'text_delta') { text += event.delta; if (event.delta) deltas++ }
       if (event.type === 'toolcall_start') startedCalls++
@@ -101,7 +115,7 @@ async function probeModel(provider: RuntimeProvider, kind: TestKind, lifetime?: 
       if (event.type === 'done') completed = event.reason === (kind === 'tools' ? 'toolUse' : 'stop')
     }
     signal.throwIfAborted()
-    if (!completed || !normalEnd) {
+    if (!completed || !normalEnd || !terminal) {
       failure = `${title}返回未正常结束，可能已截断或协议不兼容。`
       throw new Error(failure)
     }

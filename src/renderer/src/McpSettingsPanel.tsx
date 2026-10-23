@@ -23,7 +23,7 @@ export default function McpSettingsPanel() {
   return <div className="mcp-settings">
     <aside className="service-list mcp-service-list" aria-label="MCP 服务列表">
       <div className="service-list-title"><span>工具服务</span><span>{services.length}</span></div>
-      {services.length === 0 && <p className="service-empty">添加工具，让 Her<br />多一双帮忙的手。</p>}
+      {services.length === 0 && <p className="service-empty">添加工具，让 Samantha<br />多一双帮忙的手。</p>}
       {services.map(item => <button className={`service-item mcp-service-item ${item.id === selected ? 'selected' : ''}`} key={item.id} aria-label={`${item.name} · ${item.enabled ? '已启用' : '已停用'}`} aria-current={item.id === selected ? 'true' : undefined} onClick={() => setSelected(item.id)}><span className={`status-dot ${item.enabled ? '' : 'offline'}`} /><span className="mcp-service-copy"><strong title={item.name}>{item.name}</strong><small>{item.enabled ? '已启用' : '已停用'} · {item.transport === 'stdio' ? '本地' : 'HTTP'}</small></span></button>)}
       <button className="text-button add-service" onClick={() => setSelected(undefined)}><Icon name="plus" />添加 MCP 服务</button>
     </aside>
@@ -50,7 +50,6 @@ function McpEditor({ config, preset, onSaved, onDeleted, children }: { config?: 
   const [newKey, setNewKey] = useState('')
   const [clear, setClear] = useState<string[]>([])
   const [enabled, setEnabled] = useState(config?.enabled ?? false)
-  const [allowAllOperations, setAllowAllOperations] = useState(config?.allowAllOperations ?? false)
   const [status, setStatus] = useState<McpConnectionStatus>()
   const [tools, setTools] = useState<ModelTool[]>([])
   const [notice, setNotice] = useState('')
@@ -100,7 +99,7 @@ function McpEditor({ config, preset, onSaved, onDeleted, children }: { config?: 
   async function save(event: React.FormEvent) {
     event.preventDefault(); setSaving(true); setError('')
     try {
-      const input: SaveMcpServiceInput = { name, enabled, transport, allowAllOperations,
+      const input: SaveMcpServiceInput = { name, enabled, transport,
         ...(config ? { id: config.id, expectedRevision: config.revision, ...(config.presetId ? { presetId: config.presetId } : {}) } : {}),
         ...(transport === 'stdio' ? { command, args: JSON.parse(args), ...(cwd ? { cwd } : {}) } : { url }), secretValues: secrets, clearSecretKeys: clear }
       const saved = await window.her.saveMcpService(input)
@@ -142,20 +141,20 @@ function McpEditor({ config, preset, onSaved, onDeleted, children }: { config?: 
       <header className="mcp-heading"><h3>{config ? 'MCP 服务配置' : '添加 MCP 服务'}</h3><p>配置保存在本机。连接测试只发现工具，实际操作由任务执行和确认。</p></header>
       {config && <div className="mcp-connection-state" aria-label="连接状态"><span className="mcp-state" data-state={status?.state}><span className="status-dot" />{status ? connectionLabels[status.state] : '读取中'}</span><span>{status?.state === 'ready' ? `${status.toolCount} 个工具 · ` : ''}配置版本 {config.revision}</span><button className="icon-button" aria-label="刷新连接状态" title="刷新连接状态" onClick={() => void refresh().catch(cause => setError(messageOf(cause)))}><Icon name="retry" /></button></div>}
       {status?.message && <p className="mcp-status-message mcp-note">{status.message}</p>}
-      {config?.presetId && <section className="mcp-saved-dependencies" aria-label="服务依赖">
+      {config?.presetId && config.presetId !== 'playwright' && <section className="mcp-saved-dependencies" aria-label="服务依赖">
         <button type="button" className="secondary-button" disabled={checking || testing || saving} onClick={() => void diagnose()}>{checking ? '正在检查…' : checks.length ? '重新检查服务依赖' : '检查服务依赖'}</button>
         {dependencyError && <p className="error-banner" role="alert">{dependencyError}</p>}
+        {checks.some(check => check.status !== 'ready') && <p className="mcp-note" role="status">能力待就绪。打开系统设置不代表已授权或委托已完成；请重新检查，回原话题明确继续。</p>}
         <DependencyChecks checks={checks} label="服务依赖检查" />
       </section>}
-      {config?.presetId === 'playwright' && <details className="mcp-disclosure mcp-guidance"><summary>浏览器连接与确认说明<Icon name="chevron" /></summary><p>工具就绪仅表示 MCP 元数据已连接。首次读取页面时，请在 Chrome 官方 Playwright 扩展中批准连接和标签范围；Her 不会替你批准。观察和预检可能关闭并重建崩溃标签，因此读取也需确认。确认仅依据当前可见内容，无法区分隐式重连后的相同页面。未知结果请通过任务中的人工处理入口解除阻塞，原记录仍保留。</p></details>}
+      {config?.presetId === 'playwright' && <p className="mcp-note">Playwright 预设已移除。浏览器操作请使用官方 ego-browser Skill；此旧配置不会再执行，可停用或删除。</p>}
       {config?.presetId === 'markitdown' && <p className="mcp-note">文档解析仅供已授权文件使用；此处工具列表为空属于正常状态。扫描页和图表可能无法提取，Excel 公式不会重算。</p>}
       {!config && children}
       <form id="mcp-service-form" className="profile-form" onSubmit={event => void save(event)}><fieldset disabled={saving} className="mcp-fields">
         <div className="field-grid"><label className="field">MCP 名称<input required value={name} onChange={event => setName(event.target.value)} placeholder="给这个工具服务起个名字" /></label><label className="field">传输方式<select value={transport} onChange={event => setTransport(event.target.value as McpServiceConfig['transport'])}><option value="stdio">本地 stdio</option><option value="streamable-http">Streamable HTTP</option></select></label></div>
         {transport === 'stdio' ? <><label className="field">可执行命令<input required value={command} onChange={event => setCommand(event.target.value)} placeholder="可执行文件的完整路径" /></label><label className="field">参数 JSON 数组<textarea rows={2} spellCheck={false} value={args} onChange={event => setArgs(event.target.value)} /></label><label className="field">工作目录<input value={cwd} onChange={event => setCwd(event.target.value)} placeholder="可选，留空使用默认目录" /></label></> : <label className="field">MCP URL<input required type="url" value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com/mcp" /></label>}
         <label className="checkbox-field mcp-enabled"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} />启用 MCP 服务</label>
-        <label className="checkbox-field"><input type="checkbox" checked={allowAllOperations} onChange={event => setAllowAllOperations(event.target.checked)} />所有对话允许此工具的所有操作</label>
-        <p className="mcp-note">保存后，此服务在所有对话中自动执行已开放的操作，不再逐次确认，重启后仍保留。可关闭此开关恢复确认。</p>
+        <p className="mcp-note">连接配置会保留。具体操作遵循当前委托范围；超出范围或需要单独确认的动作，会在执行前请求本次授权。</p>
         <section className="mcp-credentials" aria-label="MCP 凭据"><h4>{transport === 'stdio' ? '环境变量' : '静态请求头'}</h4><p className="mcp-note">{transport === 'stdio' ? '环境变量以明文显示，留空保留原值；勾选清除后删除。' : '已保存的值不回显，留空保留；仅勾选清除时删除。'}</p>
           {transport === 'stdio' && <PresetEnvironment preset={preset} />}
           {keys.map(key => <div className="mcp-secret-row" key={key}><label className="field">{key}<input type={transport === 'stdio' ? 'text' : 'password'} autoComplete={transport === 'stdio' ? 'off' : 'new-password'} spellCheck={false} disabled={clear.includes(key)} value={Object.hasOwn(secrets, key) ? secrets[key] : transport === 'stdio' && Object.hasOwn(environment, key) ? environment[key] : ''} placeholder={transport === 'stdio' ? loadingEnvironment ? '正在读取…' : '输入值' : config?.secretKeys.includes(key) ? '已设置 · 留空保留' : '输入值'} onChange={event => setSecrets(previous => ({ ...previous, [key]: event.target.value }))} /></label><label className="checkbox-field"><input type="checkbox" checked={clear.includes(key)} onChange={event => setClear(previous => event.target.checked ? [...previous, key] : previous.filter(item => item !== key))} />清除 {key}</label></div>)}
@@ -218,12 +217,14 @@ function PresetPicker({ presets, onSaved, expanded }: { presets: McpPreset[]; on
     <summary><span>从预设添加</span><small>检查依赖，快速接入工具</small><Icon name="chevron" /></summary>
     <div className="mcp-preset-body"><label className="field">预设<select value={selected} disabled={busy} onChange={event => { generation.current++; setSelected(event.target.value); setChecks([]); setError('') }}>{presets.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
       <PresetEnvironment preset={preset} />
+      <p className="mcp-note">浏览器操作使用官方 ego-browser Skill。<button type="button" className="text-button" onClick={() => void window.her.openExternal('https://github.com/citrolabs/ego-lite/tree/main/skills/ego-browser').catch(cause => setError(messageOf(cause)))}>查看官方 ego-browser Skill</button></p>
       <p className="mcp-note">检查不会安装软件或启动业务操作。{selected === 'peekaboo' && 'Mac 预设允许前台焦点和共享输入；目标会显示在任务步骤中，可随时停止。'}</p>
       <details className="mcp-install-guide"><summary>安装与权限说明</summary><p>{preset?.guidance}</p></details>
       <div className="form-actions mcp-preset-actions"><button type="button" className="secondary-button" disabled={busy} onClick={() => void check()}>{busy ? '正在处理…' : checks.length ? '重新检查依赖' : '检查预设依赖'}</button>
-        {preset?.executable && <button type="button" className="secondary-button" disabled={busy || !checks.some(check => check.component === (selected === 'peekaboo' ? 'Peekaboo' : selected === 'playwright' ? '@playwright/mcp' : selected === 'markitdown' ? 'MarkItDown' : 'open-websearch') && check.status === 'ready')} onClick={() => void create()}>添加已验证预设</button>}
+        {preset?.executable && <button type="button" className="secondary-button" disabled={busy || !checks.some(check => check.component === (selected === 'peekaboo' ? 'Peekaboo' : selected === 'markitdown' ? 'MarkItDown' : 'open-websearch') && check.status === 'ready')} onClick={() => void create()}>添加已验证预设</button>}
       </div>
       {error && <p className="error-banner" role="alert">{error}</p>}
+      {checks.some(check => check.status !== 'ready') && <p className="mcp-note" role="status">能力待就绪。打开系统设置不代表已授权或委托已完成；请重新检查，回原话题明确继续。</p>}
       <DependencyChecks checks={checks} />
     </div>
   </details>

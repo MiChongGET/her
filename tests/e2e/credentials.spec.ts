@@ -7,14 +7,14 @@ test('native encrypted credentials survive saving a profile without re-entering 
   const directory = mkdtempSync(join(tmpdir(), 'her-credentials-'))
   const env = Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] =>
     entry[1] !== undefined && entry[0] !== 'ELECTRON_RUN_AS_NODE'))
-  const app = await _electron.launch({ args: [resolve('.')], env: { ...env, HER_DATA_DIR: directory } })
+  const app = await _electron.launch({ ...(process.env.HER_TEST_APP_EXECUTABLE ? { executablePath: process.env.HER_TEST_APP_EXECUTABLE, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: directory } })
   try {
     const page = await app.firstWindow()
-    await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
     const saved = await page.evaluate(async () => {
       const input = {
         name: 'Native credential fixture', protocol: 'openai-responses' as const,
-        baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture-model', authMethod: 'api-key' as const
+        baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture-model', contextWindow: 128000, authMethod: 'api-key' as const
       }
       const created = await window.her.saveProfile({ ...input, apiKey: 'synthetic-credential-fixture' })
       return window.her.saveProfile({ ...input, id: created.id, name: 'Renamed credential fixture' })

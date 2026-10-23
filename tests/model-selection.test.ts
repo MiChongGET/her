@@ -8,7 +8,7 @@ afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCle
 async function setup() {
   const s = await startFixtureServer('openai', 'text'); cleanup.push(s.close)
   const f = harness()
-  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'default-model', authMethod: 'none',
+  const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'default-model', contextWindow: 128000, authMethod: 'none',
     models: [{ id: 'default-model' }, { id: 'other-model' }] })
   return { s, f, p }
 }

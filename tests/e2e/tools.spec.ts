@@ -10,12 +10,12 @@ async function launch(directory: string) {
   const executablePath = process.env.HER_TEST_APP_EXECUTABLE
   const app = await _electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: [resolve('.')] }), env: { ...env, HER_DATA_DIR: directory } })
   const page = await app.firstWindow()
-  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '日常', exact: true })).toBeVisible()
   return { app, page }
 }
 async function profile(page: Page, url: string, protocol: 'openai' | 'anthropic' | 'openai-responses') {
   await page.evaluate(async ({ url, protocol }) => {
-    const saved = await window.her.saveProfile({ name: '合成验收', protocol, authMethod: 'none', baseUrl: url, model: 'fixture-vision', models: [{ id: 'fixture-vision', multimodal: true }] })
+    const saved = await window.her.saveProfile({ name: '合成验收', protocol, contextWindow: 128000, authMethod: 'none', baseUrl: url, model: 'fixture-vision', models: [{ id: 'fixture-vision', multimodal: true }] })
     await window.her.selectProfile(saved.id)
   }, { url, protocol })
   await page.reload()
@@ -44,15 +44,15 @@ for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
         await window.her.testMcpService(service.id)
       }, mcp.url)
       await send(page, '读取合成工具图像')
-      await expect(page.getByRole('button', { name: '允许这次操作', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: '执行一次', exact: true })).toBeVisible()
       expect(mcp.requests.filter(r => r.method === 'tools/call')).toHaveLength(0)
-      await page.getByRole('button', { name: '允许这次操作', exact: true }).click()
+      await page.getByRole('button', { name: '执行一次', exact: true }).click()
       await expect.poll(() => mcp.requests.filter(r => r.method === 'tools/call').length).toBe(1)
-      await expect(page.getByRole('button', { name: '允许这次操作', exact: true })).toBeVisible()
-      await page.getByRole('button', { name: '允许这次操作', exact: true }).click()
+      await expect(page.getByRole('button', { name: '执行一次', exact: true })).toBeVisible()
+      await page.getByRole('button', { name: '执行一次', exact: true }).click()
       await expect(page.locator('article.message-assistant[data-status="complete"]')).toContainText('合成图片已收到。')
       const preview = await page.evaluate(async () => {
-        const id = (await window.her.getBootstrap()).conversations[0].id
+        const id = (await window.her.getBootstrap()).dailyConversationId
         const result = (await window.her.getMessages(id)).at(-1)!.toolCalls![0].result
         if (!result || typeof result === 'string') throw new Error('Missing structured result')
         const image = result.content.find(block => block.type === 'image')!
@@ -66,15 +66,15 @@ for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
       if (protocol === 'openai-responses') expect(JSON.stringify(imageRequest.input)).toContain('"type":"input_image"')
       expect(mcp.requests.filter(r => r.method === 'tools/call')).toHaveLength(2)
       await send(page, '第二步等待确认时停止')
-      await expect(page.getByRole('button', { name: '允许这次操作', exact: true })).toBeVisible()
+      await expect(page.getByRole('button', { name: '执行一次', exact: true })).toBeVisible()
       await page.getByRole('button', { name: '停止生成', exact: true }).click()
       await expect(page.getByRole('button', { name: '继续任务', exact: true })).toBeVisible()
-      const id = (await page.evaluate(() => window.her.getBootstrap())).conversations[0].id
-      const messages = await page.evaluate(id => window.her.getMessages(id), id)
+      const id = (await page.evaluate(() => window.her.getBootstrap())).dailyConversationId
+      const messages = await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getMessages(id) }, id)
       const requests = provider.requests.length
       await app.close(); app = undefined
       running = await launch(directory); app = running.app; page = running.page
-      expect(await page.evaluate(id => window.her.getMessages(id), id)).toEqual(messages)
+      expect(await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getMessages(id) }, id)).toEqual(messages)
       await expect(page.getByRole('button', { name: '继续任务', exact: true })).toBeVisible()
       expect(provider.requests).toHaveLength(requests)
       expect(mcp.requests.filter(r => r.method === 'tools/call')).toHaveLength(2)
@@ -95,11 +95,10 @@ for (const protocol of ['openai', 'anthropic', 'openai-responses'] as const) {
         await page.evaluate(id => window.her.trashConversation(id), id)
         const failure = await page.evaluate(async id => { try { await window.her.purgeConversation(id); return '' } catch (error) { return String(error) } }, id)
         expect((await page.evaluate(() => window.her.listTrashedConversations())).map(c => c.id)).toContain(id)
-        expect(failure).toMatch(/图片.*清理.*重试/); expect(failure).not.toContain(directory)
+        expect(failure).toMatch(/清理.*重试/); expect(failure).not.toContain(directory)
         await app.close(); app = undefined
         running = await launch(directory); app = running.app; page = running.page
-        expect((await page.evaluate(() => window.her.listTrashedConversations())).map(c => c.id)).toContain(id)
-        await page.evaluate(id => window.her.purgeConversation(id), id)
+        await expect.poll(() => page.evaluate(() => window.her.listTrashedConversations())).toEqual([])
         expect(await page.evaluate(() => window.her.listTrashedConversations())).toEqual([])
         const remaining = await app.evaluate(async (_electron, { directory, imageIds }) => {
           const fs = process.getBuiltinModule('node:fs'), path = process.getBuiltinModule('node:path')
@@ -136,17 +135,20 @@ for (const fixture of [{ name: 'mixed.pdf', pages: [2, 3, 1] }, { name: 'scanned
     })
     // Native-dialog return is replaced only in this test process; production IPC/preload/file authority are real.
     await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, resolve('tests/fixtures/documents', fixture.name))
+    await page.getByText('文字与附件', { exact: true }).click()
     await page.getByRole('button', { name: '添加资料', exact: true }).click()
     await expect(page.getByText(fixture.name, { exact: true }).first()).toBeVisible()
-    const id = (await page.evaluate(() => window.her.getBootstrap())).conversations[0].id
+    const id = (await page.evaluate(() => window.her.getBootstrap())).dailyConversationId
     const grants = await page.evaluate(id => window.her.listFileGrants(id), id)
     // Metadata-only references are visible in the composer; retrieve their opaque IDs from the real file API.
     const { files } = await page.evaluate(async id => window.her.selectFiles({ conversationId: id, kind: 'file', scope: 'conversation' }), id)
     fileId = files[0].id
     await send(page, '读取第 2 个物理页')
+    // File grants identify allowed sources; an unbound opaque tool still needs its own exact action approval.
+    await page.getByRole('button', { name: '执行一次', exact: true }).click()
     await expect(page.locator('article.message-assistant[data-status="complete"]')).toContainText(`物理页 ${fixture.pages[0]}`)
     expect(JSON.stringify(provider.requests.at(-1)!.body.messages)).toContain('data:image/png;base64,')
-    const messages = await page.evaluate(id => window.her.getMessages(id), id)
+    const messages = await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getMessages(id) }, id)
     const tool = messages.at(-1)!.toolCalls![0]
     const pdfEvidence = await app.evaluate(() => (globalThis as any).__t13Pdf)
     expect(pdfEvidence.workers.some((url: string) => url.endsWith('/pdf.worker.mjs'))).toBe(true)
@@ -181,14 +183,14 @@ test('integrated HTTP: static authorization rejects 401, persists protected head
     }, denied.saved)
     expect(accepted.status).toBe('passed')
     await send(page, '仅在合成服务上执行一次后断线')
-    await page.getByRole('button', { name: '允许这次操作', exact: true }).click()
-    const id = (await page.evaluate(() => window.her.getBootstrap())).conversations[0].id
-    await expect.poll(async () => (await page.evaluate(id => window.her.getConversationTask(id), id))?.unknownCalls?.length).toBe(1)
+    await page.getByRole('button', { name: '执行一次', exact: true }).click()
+    const id = (await page.evaluate(() => window.her.getBootstrap())).dailyConversationId
+    await expect.poll(async () => (await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getConversationTask(id) }, id))?.unknownCalls?.length).toBe(1)
     expect(mcp.requests.filter(r => r.method === 'tools/call')).toHaveLength(1)
-    const requests = provider.requests.length
     await app.close(); app = undefined
+    const requests = provider.requests.length
     const restarted = await launch(directory); app = restarted.app
-    expect((await restarted.page.evaluate(id => window.her.getConversationTask(id), id))?.unknownCalls).toHaveLength(1)
+    expect((await restarted.page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getConversationTask(id) }, id))?.unknownCalls).toHaveLength(1)
     expect(provider.requests).toHaveLength(requests)
     expect(mcp.requests.filter(r => r.method === 'tools/call')).toHaveLength(1)
   } finally { await app?.close(); await provider.close(); await mcp.close(); rmSync(directory, { recursive: true, force: true }) }
@@ -206,14 +208,14 @@ test('integrated installed MarkItDown: four real formats reach the configured fi
     await profile(page, provider.baseUrl, 'openai')
     await page.evaluate(async () => { const saved = await window.her.createMcpPreset('markitdown'); const status = await window.her.testMcpService(saved.id); if (status.status !== 'passed') throw new Error('Pinned parser is not ready') })
     for (const [name, marker] of [['tiny.docx', 'DOCX_MARKER_731'], ['tiny.pptx', 'PPTX_MARKER_732'], ['tiny.xlsx', 'Revenue'], ['text.pdf', 'PDF_TEXT_MARKER_738']]) {
-      const id = await page.evaluate(async () => (await window.her.createConversation()).id)
+      const id = await page.evaluate(async () => (await window.her.createConversation()).conversation!.id)
       await app.evaluate(({ dialog }, path) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [path] }) }, resolve('tests/fixtures/documents', name))
       const selected = await page.evaluate(id => window.her.selectFiles({ conversationId: id, kind: 'file', scope: 'conversation' }), id)
       fileId = selected.files[0].id
       const settings = await page.evaluate(() => window.her.getBootstrap())
       await page.evaluate(input => window.her.sendMessage(input), { requestId: 'format-' + name, conversationId: id, profileId: settings.settings.activeProfileId!, content: '读取合成文档', fileIds: [fileId] })
-      await expect.poll(async () => (await page.evaluate(id => window.her.getConversationTask(id), id))?.run.status, { timeout: 30_000 }).toBe('completed')
-      const messages = await page.evaluate(id => window.her.getMessages(id), id)
+      await expect.poll(async () => (await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getConversationTask(id) }, id))?.run.status, { timeout: 30_000 }).toBe('completed')
+      const messages = await page.evaluate(async id => { const daily = (await window.her.getBootstrap()).dailyConversationId; await window.her.selectWorkspace({ section: id === daily ? 'daily' : 'work', conversationId: id }); return window.her.getMessages(id) }, id)
       const result = messages.at(-1)!.toolCalls![0].result
       expect(result).toMatchObject({ structuredContent: { source: { fileId, name } } })
       expect(JSON.stringify(result).replace(/\\+_/g, '_')).toContain(marker)

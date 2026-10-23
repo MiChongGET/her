@@ -1,0 +1,82 @@
+{
+  "time": "2026-10-23T01:43:09.525Z",
+  "officialCli": true,
+  "capabilities": {
+    "observe": {
+      "available": false,
+      "reason": "尚未证实观察不会自动重建崩溃页或受到后台动作影响。"
+    },
+    "navigate": {
+      "available": false,
+      "reason": "尚未证实可在发生前阻断 unload、后台请求、重定向与停止后的动作。"
+    }
+  },
+  "commands": [
+    {
+      "command": {
+        "kind": "create",
+        "name": "Her bounded browser 2d95452d-156c-4b7b-99c7-85d968b05ae2"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"herControlled\":{\"spaceId\":1,\"ownership\":\"agent\",\"pages\":[{\"label\":\"p1\",\"openedBy\":\"agent\"}]}}\n\n"
+          }
+        ]
+      }
+    },
+    {
+      "command": {
+        "kind": "observe",
+        "workspaceId": 1,
+        "pageId": "p1"
+      },
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"herControlled\":{\"spaceId\":1,\"pageId\":\"p1\",\"url\":\"chrome://new-tab-page/\",\"snapshot\":\"[p1 \\\"新标签页\\\" | space \\\"Her bounded browser 2d95452d-156c-4b7b-99c7-85d968b05ae2\\\"(1): 1 managed, 0 untracked — p1* \\\"新标签页\\\"]\\nroot\\n\"}}\n\n"
+          }
+        ]
+      }
+    }
+  ],
+  "finished": true,
+  "userTabsTouched": 0,
+  "owned": {
+    "workspaceId": "1",
+    "pageId": "p1"
+  },
+  "fixtureSetup": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{}\n\n"
+      }
+    ]
+  },
+  "setupRequests": [
+    "/attack",
+    "/favicon.ico",
+    "/unapproved-background"
+  ],
+  "typedRequests": [],
+  "status": "guard-probe-complete; automatic observe/navigate unavailable",
+  "reason": "Observed autonomous background request during exact approved fixture setup. No pre-effect unload/redirect/background/remote-cancel confinement established; no crash-observation guarantee. No automatic capability enabled.",
+  "allRequests": [
+    "/attack",
+    "/favicon.ico",
+    "/unapproved-background"
+  ],
+  "finishReceipt": {
+    "spaceId": 1,
+    "closedSpace": true,
+    "keptManagedLabels": [],
+    "closedManagedLabels": [
+      "p1"
+    ],
+    "preservedUnmanagedCount": 0
+  },
+  "cleanup": "One exact finish after successful diagnostic probe, per controller clarification; no later page operation."
+}

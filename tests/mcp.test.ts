@@ -36,9 +36,10 @@ async function setup(options: MockOptions = {}, transport: 'stdio' | 'http' = 's
 }
 
 describe('MCP host', () => {
-  it('the saved all-conversation switch skips approval for this service and disabling it invalidates old snapshots', async () => {
-    const { manager, registry, config, saved, context } = await setup({}, 'http')
-    const allowed = await config.save({ ...saved, expectedRevision: saved.revision, allowAllOperations: true })
+  it('a legacy global grant never skips approval and config edits invalidate old snapshots', async () => {
+    const { manager, registry, config, saved, context, store } = await setup({}, 'http')
+    const persisted = store.getMcpService(saved.id)!
+    store.saveMcpService({ ...persisted, config: { ...persisted.config, allowAllOperations: true } }, saved.revision)
     await manager.connect(saved.id)
     let prompts = 0
     const approvals = new ToolApprovalService(request => {
@@ -48,12 +49,12 @@ describe('MCP host', () => {
     const snapshot = registry.snapshot()
     await manager.call(saved.id, 'echo', {}, authorized)
     await manager.call(saved.id, 'echo', {}, { ...authorized, conversationId: 'another-conversation', runId: 'another-run' })
-    expect(prompts).toBe(0)
-    await config.save({ ...allowed, expectedRevision: allowed.revision, allowAllOperations: false })
+    expect(prompts).toBe(2)
+    await config.save({ ...saved, expectedRevision: saved.revision, name: 'renamed' })
     await expect(snapshot.execute(mcpToolName(saved.id, 'echo'), {}, authorized)).rejects.toThrow(/失效/)
     await manager.connect(saved.id)
     await manager.call(saved.id, 'echo', {}, authorized)
-    expect(prompts).toBe(1)
+    expect(prompts).toBe(3)
   })
 
   it.each(['stdio', 'http'] as const)('discovers every page and shares connection over %s', async transport => {
@@ -147,7 +148,7 @@ describe('MCP host', () => {
   })
 
   it.each([
-    ['Chrome 观察已失效，请重新读取页面或标签列表；不要重复未知动作。', /Chrome.*观察已失效/],
+    ['观察已失效或目标发生变化，请重新观察后再决定，不能重复未知动作。', /观察已失效/],
     ['MCP 工具清单已失效。', /工具清单.*失效/]
   ] as const)('preserves the fixed browser or catalog diagnostic: %s', async (message, expected) => {
     const { manager, saved, context } = await setup({}, 'http', undefined, { execute: async () => { throw new Error(message) } })
@@ -161,7 +162,7 @@ describe('MCP host', () => {
     })
     await manager.connect(saved.id)
     const result = await manager.call(saved.id, 'echo', {}, context)
-    expect(result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/超时.*Chrome.*扩展/) }] })
+    expect(result).toMatchObject({ isError: true, content: [{ text: expect.stringMatching(/超时.*结果可能未知.*不要重复/) }] })
     expect(JSON.stringify(result)).not.toMatch(/private-runtime-secret|JSON Schema|OAuth/)
   })
 

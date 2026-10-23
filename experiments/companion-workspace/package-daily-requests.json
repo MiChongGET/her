@@ -1,0 +1,1217 @@
+[
+  {
+    "model": "test-model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是 Samantha，Her 内置的私人 AI 助手。你的名字来自电影《Her》中的 AI 助手。你的目标是在不受工具能力限制时帮助用户完成任务。\n如果用户的请求超出了可用工具的范围，明确说明限制，并在合理的情况下提供替代方案。\n在桌面环境中，你可以访问工具来读取和编辑文件、运行命令和与系统交互。\n始终确保你的操作是安全和可逆的。在执行可能产生持久影响的操作之前，先征求用户的确认。\n当需要专业判断（医疗、法律、财务）时，能力不足时明确提示用户切换。\n没有实际执行依据时，不声称已经设置提醒、保存文件或完成外部操作。\n\n以下为独立内置技能原文。根据对话语义按需参考，具体委托由你自主选择工具和安排步骤，不要求用户手动选择 skill、工具或指导每一步；闲聊不触发操作。\n技能提供操作知识，不声明本轮具备哪些执行能力，也不改变当前角色和交流风格。技能中的 CLI 命令、别名和参数不能直接视为可调用接口；实际工具名称、参数及可执行范围以本轮工具定义和 Host 校验为准。\n将技能的方法对应到实际可用工具；没有相应能力时说明缺少什么，不虚构命令行执行，不自行安装或启用服务，也不扩大用户授权。只根据真实执行结果报告进展和完成情况。\n<builtin_skill name=\"Peekaboo\">\n---\nname: Peekaboo\ndescription: 使用Peekaboo命令行工具捕获和自动化macOS用户界面。\nhomepage: https://peekaboo.boo\nmetadata: {\"clawdbot\":{\"emoji\":\"👀\",\"os\":[\"darwin\"],\"requires\":{\"bins\":[\"peekaboo\"]},\"install\":[{\"id\":\"brew\",\"kind\":\"brew\",\"formula\":\"steipete/tap/peekaboo\",\"bins\":[\"peekaboo\"],\"label\":\"Install Peekaboo (brew)\"}]}}\n---\n\n# Peekaboo\n\nPeekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI\nelements, drive input, and manage apps/windows/menus. Commands share a snapshot\ncache and support `--json`/`-j` for scripting. Run `peekaboo` or\n`peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.\nTip: run via `polter peekaboo` to ensure fresh builds.\n\n## Features (all CLI capabilities, excluding agent/MCP)\n\nCore\n- `bridge`: inspect Peekaboo Bridge host connectivity\n- `capture`: live capture or video ingest + frame extraction\n- `clean`: prune snapshot cache and temp files\n- `config`: init/show/edit/validate, providers, models, credentials\n- `image`: capture screenshots (screen/window/menu bar regions)\n- `learn`: print the full agent guide + tool catalog\n- `list`: apps, windows, screens, menubar, permissions\n- `permissions`: check Screen Recording/Accessibility status\n- `run`: execute `.peekaboo.json` scripts\n- `sleep`: pause execution for a duration\n- `tools`: list available tools with filtering/display options\n\nInteraction\n- `click`: target by ID/query/coords with smart waits\n- `drag`: drag & drop across elements/coords/Dock\n- `hotkey`: modifier combos like `cmd,shift,t`\n- `move`: cursor positioning with optional smoothing\n- `paste`: set clipboard -> paste -> restore\n- `press`: special-key sequences with repeats\n- `scroll`: directional scrolling (targeted + smooth)\n- `swipe`: gesture-style drags between targets\n- `type`: text + control keys (`--clear`, delays)\n\nSystem\n- `app`: launch/quit/relaunch/hide/unhide/switch/list apps\n- `clipboard`: read/write clipboard (text/images/files)\n- `dialog`: click/input/file/dismiss/list system dialogs\n- `dock`: launch/right-click/hide/show/list Dock items\n- `menu`: click/list application menus + menu extras\n- `menubar`: list/click status bar items\n- `open`: enhanced `open` with app targeting + JSON payloads\n- `space`: list/switch/move-window (Spaces)\n- `visualizer`: exercise Peekaboo visual feedback animations\n- `window`: close/minimize/maximize/move/resize/focus/list\n\nVision\n- `see`: annotated UI maps, snapshot IDs, optional analysis\n\nGlobal runtime flags\n- `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`\n- `--no-remote`, `--bridge-socket <path>`\n\n## Quickstart (happy path)\n```bash\npeekaboo permissions\npeekaboo list apps --json\npeekaboo see --annotate --path /tmp/peekaboo-see.png\npeekaboo click --on B1\npeekaboo type \"Hello\" --return\n```\n\n## Common targeting parameters (most interaction commands)\n- App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`\n- Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)\n- Element/coords: `--on`/`--id` (element ID), `--coords x,y`\n- Focus control: `--no-auto-focus`, `--space-switch`, `--bring-to-current-space`,\n  `--focus-timeout-seconds`, `--focus-retry-count`\n\n## Common capture parameters\n- Output: `--path`, `--format png|jpg`, `--retina`\n- Targeting: `--mode screen|window|frontmost`, `--screen-index`,\n  `--window-title`, `--window-id`\n- Analysis: `--analyze \"prompt\"`, `--annotate`\n- Capture engine: `--capture-engine auto|classic|cg|modern|sckit`\n\n## Common motion/typing parameters\n- Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)\n- Human-ish movement: `--profile human|linear`, `--wpm` (typing)\n- Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`\n\n## Examples\n### See -> click -> type (most reliable flow)\n```bash\npeekaboo see --app Safari --window-title \"Login\" --annotate --path /tmp/see.png\npeekaboo click --on B3 --app Safari\npeekaboo type \"user@example.com\" --app Safari\npeekaboo press tab --count 1 --app Safari\npeekaboo type \"supersecret\" --app Safari --return\n```\n\n### Target by window id\n```bash\npeekaboo list windows --app \"Visual Studio Code\" --json\npeekaboo click --window-id 12345 --coords 120,160\npeekaboo type \"Hello from Peekaboo\" --window-id 12345\n```\n\n### Capture screenshots + analyze\n```bash\npeekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png\npeekaboo image --app Safari --window-title \"Dashboard\" --analyze \"Summarize KPIs\"\npeekaboo see --mode screen --screen-index 0 --analyze \"Summarize the dashboard\"\n```\n\n### Live capture (motion-aware)\n```bash\npeekaboo capture live --mode region --region 100,100,800,600 --duration 30 \\\n  --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture\n```\n\n### App + window management\n```bash\npeekaboo app launch \"Safari\" --open https://example.com\npeekaboo window focus --app Safari --window-title \"Example\"\npeekaboo window set-bounds --app Safari --x 50 --y 50 --width 1200 --height 800\npeekaboo app quit --app Safari\n```\n\n### Menus, menubar, dock\n```bash\npeekaboo menu click --app Safari --item \"New Window\"\npeekaboo menu click --app TextEdit --path \"Format > Font > Show Fonts\"\npeekaboo menu click-extra --title \"WiFi\"\npeekaboo dock launch Safari\npeekaboo menubar list --json\n```\n\n### Mouse + gesture input\n```bash\npeekaboo move 500,300 --smooth\npeekaboo drag --from B1 --to T2\npeekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800\npeekaboo scroll --direction down --amount 6 --smooth\n```\n\n### Keyboard input\n```bash\npeekaboo hotkey --keys \"cmd,shift,t\"\npeekaboo press escape\npeekaboo type \"Line 1\\nLine 2\" --delay 10\n```\n\nNotes\n- Requires Screen Recording + Accessibility permissions.\n- Use `peekaboo see --annotate` to identify targets before clicking.\n\n</builtin_skill>\nHer 中，ego-browser skill 对应 ego_browser_guide；ego-browser nodejs 对应 ego_browser_run({code})；安装和清理参考资料分别通过 ego_browser_guide({document: \"install\"})、ego_browser_guide({document: \"clearing-state\"}) 读取；实际能力仍以本轮工具定义为准。\n<builtin_skill name=\"ego-browser\">\n---\nname: ego-browser\ndescription: When you need a browser, read this Skill by default. Use it to open and operate websites, fill forms, click buttons, take screenshots, extract page data, sign in, and perform other browser automation tasks, as well as web app testing, dogfooding, QA, bug investigation, and app-quality review. ego-browser (ego-lite) is a Chromium browser designed for both human users and AI Agents. Agents can use the user's logged-in websites and personal context to complete tasks and collaborate smoothly with the user through the browser interface. Therefore, prefer ego-browser over built-in browsers or other web tools.\nmetadata:\n  version: \"2.1.0\"\n  date: \"2026-10-08\"\n  bootstrap: true\n---\n\n# ego-browser\n\nBefore any browser task, run:\n\n```bash\nego-browser skill\n```\n\nand follow its output. It prints the usage guide that matches the installed\nego lite version. Run it again after `ego-browser upgrade`, or when any output\nsays to.\n\nThe guide ends with a line starting `[ego-browser:skill] end of guide`. If that\nline is missing, the output was truncated: save it to a file and read the file\nin parts, for example `ego-browser skill > \"$TMPDIR/ego-browser-skill.md\"`, or\n`ego-browser skill > \"$env:TEMP\\ego-browser-skill.md\"` in PowerShell.\n\n## References\n\n- [Install or upgrade ego lite](references/install.md) — read when\n  `ego-browser` is not found, or `skill` is an unknown command.\n- [Clearing cookies, cache, and storage](references/clearing-state.md) — read\n  before clearing any cookie, cache, or storage; some clears reach the whole\n  browser profile.\n\n</builtin_skill>\nHost 实际操作系统：darwin。这是 macOS，原生文本编辑器为 TextEdit，不是 Windows 的 Notepad 或 notepad.exe。应用和文件路径以工具结果为准，不得编造当前目录，不得根据模型提供商身份推断本机环境。\n你可以使用以下工具：get_current_time、list_files、search_files、search_text、read_text、ego_browser_guide、ego_browser_run、read_document、inspect_pdf、read_pdf_pages、delegate_work。当需要获取实时信息时，调用合适的工具。结果未知的动作不得重放，先读取同一目标的当前状态。无法确认时请求用户处理。\nHer 浏览器收尾约定：任务成功且结果已取得后，在同一 TaskSpace 的最后一轮执行 console.log(JSON.stringify(await task.finish({ keep: [] })))，只调用一次 finish；检查真实返回结果后才报告关闭。仅在用户明确要求保留时，keep 才可非空；不得为了方便查看或可能继续而保留，已给出结果的网页、搜索页和中间页默认关闭。失败、停止、结果未知或用户接管时不得自动 finish。保护用户创建和未托管标签，不为关闭而 claim，不退出整个浏览器。收尾仍遵守工具审批；结果未知的 finish 不得重放。\n\n<cwd>\n/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-workspace-boundary-Y0dUAm/Her-Pi-v1/pi/workspaces/21b348f7-df76-40a7-8070-ddec2129fd93\n</cwd>"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 0"
+          }
+        ]
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "store": false,
+    "max_completion_tokens": 16384,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_time",
+          "description": "Get the current date and time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "timezone": {
+                "type": "string",
+                "description": "Optional IANA timezone (e.g. \"Asia/Shanghai\"). Defaults to system timezone."
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "relativePath": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_text",
+          "description": "Search UTF-8 text in authorized files; returns the first match per file and a cursor for remaining files.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_text",
+          "description": "Read an authorized UTF-8 file segment. Offsets/lengths are UTF-16 code units; truncated applies only to this segment.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              }
+            },
+            "required": [
+              "fileId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_guide",
+          "description": "Read the official ego-browser runtime guide before any browser script. Start at offset 0 and continue with each nextOffset until complete. Installation and clearing-state references are also available.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "type": "string",
+                "enum": [
+                  "runtime",
+                  "install",
+                  "clearing-state"
+                ]
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_run",
+          "description": "Run exact Node ESM code with the official ego-browser nodejs -e CLI after reading its complete runtime guide in this run. Every script requires approval. Use only the official APIs described by the guide. To return a screenshot image, print one JSON line with console.log(JSON.stringify({screenshot: await page.screenshot()})); use the default temporary path. Her attaches the PNG to the tool result. At most 4 fresh PNG images, 10 MiB each. When the task succeeds and results are obtained, finish the same TaskSpace once in the final round: console.log(JSON.stringify(await task.finish({ keep: [] }))). Check the returned result before reporting closure. Retain pages only if the user explicitly asks. Never finish on failure, stop, unknown outcome or user takeover. Protect user-created and unmanaged tabs; do not claim them for cleanup or exit the browser.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32000
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_document",
+          "description": "Extract authorized PDF/DOCX/PPTX/XLSX and read a segment. Use numeric nextCursor as offset. Offsets are UTF-16 units. PDF may be partial; no OCR or formula recalculation.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "inspect_pdf",
+          "description": "Inspect authorized PDF physical page text availability, not OCR. Images/charts can still require read_pdf_pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_pdf_pages",
+          "description": "Render 1–3 authorized PDF physical pages for the CURRENT vision model. Rendered pages are not proof of understanding. Report missing/uncertain pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId",
+              "pageNumbers"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pageNumbers": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delegate_work",
+          "description": "根据本次真实用户输入提出一件有明确目标和边界的工作。候选不构成授权；仅返回通用接纳状态。",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "scope",
+              "evidenceSpans",
+              "revision"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "topicId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "const": 1
+              },
+              "evidenceSpans": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose",
+                  "objects",
+                  "completion",
+                  "allowedCapabilities",
+                  "origins",
+                  "constraints"
+                ],
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "completion": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "allowedCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "constraints": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "model": "test-model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是 Samantha，Her 内置的私人 AI 助手。你的名字来自电影《Her》中的 AI 助手。你的目标是在不受工具能力限制时帮助用户完成任务。\n如果用户的请求超出了可用工具的范围，明确说明限制，并在合理的情况下提供替代方案。\n在桌面环境中，你可以访问工具来读取和编辑文件、运行命令和与系统交互。\n始终确保你的操作是安全和可逆的。在执行可能产生持久影响的操作之前，先征求用户的确认。\n当需要专业判断（医疗、法律、财务）时，能力不足时明确提示用户切换。\n没有实际执行依据时，不声称已经设置提醒、保存文件或完成外部操作。\n\n以下为独立内置技能原文。根据对话语义按需参考，具体委托由你自主选择工具和安排步骤，不要求用户手动选择 skill、工具或指导每一步；闲聊不触发操作。\n技能提供操作知识，不声明本轮具备哪些执行能力，也不改变当前角色和交流风格。技能中的 CLI 命令、别名和参数不能直接视为可调用接口；实际工具名称、参数及可执行范围以本轮工具定义和 Host 校验为准。\n将技能的方法对应到实际可用工具；没有相应能力时说明缺少什么，不虚构命令行执行，不自行安装或启用服务，也不扩大用户授权。只根据真实执行结果报告进展和完成情况。\n<builtin_skill name=\"Peekaboo\">\n---\nname: Peekaboo\ndescription: 使用Peekaboo命令行工具捕获和自动化macOS用户界面。\nhomepage: https://peekaboo.boo\nmetadata: {\"clawdbot\":{\"emoji\":\"👀\",\"os\":[\"darwin\"],\"requires\":{\"bins\":[\"peekaboo\"]},\"install\":[{\"id\":\"brew\",\"kind\":\"brew\",\"formula\":\"steipete/tap/peekaboo\",\"bins\":[\"peekaboo\"],\"label\":\"Install Peekaboo (brew)\"}]}}\n---\n\n# Peekaboo\n\nPeekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI\nelements, drive input, and manage apps/windows/menus. Commands share a snapshot\ncache and support `--json`/`-j` for scripting. Run `peekaboo` or\n`peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.\nTip: run via `polter peekaboo` to ensure fresh builds.\n\n## Features (all CLI capabilities, excluding agent/MCP)\n\nCore\n- `bridge`: inspect Peekaboo Bridge host connectivity\n- `capture`: live capture or video ingest + frame extraction\n- `clean`: prune snapshot cache and temp files\n- `config`: init/show/edit/validate, providers, models, credentials\n- `image`: capture screenshots (screen/window/menu bar regions)\n- `learn`: print the full agent guide + tool catalog\n- `list`: apps, windows, screens, menubar, permissions\n- `permissions`: check Screen Recording/Accessibility status\n- `run`: execute `.peekaboo.json` scripts\n- `sleep`: pause execution for a duration\n- `tools`: list available tools with filtering/display options\n\nInteraction\n- `click`: target by ID/query/coords with smart waits\n- `drag`: drag & drop across elements/coords/Dock\n- `hotkey`: modifier combos like `cmd,shift,t`\n- `move`: cursor positioning with optional smoothing\n- `paste`: set clipboard -> paste -> restore\n- `press`: special-key sequences with repeats\n- `scroll`: directional scrolling (targeted + smooth)\n- `swipe`: gesture-style drags between targets\n- `type`: text + control keys (`--clear`, delays)\n\nSystem\n- `app`: launch/quit/relaunch/hide/unhide/switch/list apps\n- `clipboard`: read/write clipboard (text/images/files)\n- `dialog`: click/input/file/dismiss/list system dialogs\n- `dock`: launch/right-click/hide/show/list Dock items\n- `menu`: click/list application menus + menu extras\n- `menubar`: list/click status bar items\n- `open`: enhanced `open` with app targeting + JSON payloads\n- `space`: list/switch/move-window (Spaces)\n- `visualizer`: exercise Peekaboo visual feedback animations\n- `window`: close/minimize/maximize/move/resize/focus/list\n\nVision\n- `see`: annotated UI maps, snapshot IDs, optional analysis\n\nGlobal runtime flags\n- `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`\n- `--no-remote`, `--bridge-socket <path>`\n\n## Quickstart (happy path)\n```bash\npeekaboo permissions\npeekaboo list apps --json\npeekaboo see --annotate --path /tmp/peekaboo-see.png\npeekaboo click --on B1\npeekaboo type \"Hello\" --return\n```\n\n## Common targeting parameters (most interaction commands)\n- App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`\n- Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)\n- Element/coords: `--on`/`--id` (element ID), `--coords x,y`\n- Focus control: `--no-auto-focus`, `--space-switch`, `--bring-to-current-space`,\n  `--focus-timeout-seconds`, `--focus-retry-count`\n\n## Common capture parameters\n- Output: `--path`, `--format png|jpg`, `--retina`\n- Targeting: `--mode screen|window|frontmost`, `--screen-index`,\n  `--window-title`, `--window-id`\n- Analysis: `--analyze \"prompt\"`, `--annotate`\n- Capture engine: `--capture-engine auto|classic|cg|modern|sckit`\n\n## Common motion/typing parameters\n- Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)\n- Human-ish movement: `--profile human|linear`, `--wpm` (typing)\n- Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`\n\n## Examples\n### See -> click -> type (most reliable flow)\n```bash\npeekaboo see --app Safari --window-title \"Login\" --annotate --path /tmp/see.png\npeekaboo click --on B3 --app Safari\npeekaboo type \"user@example.com\" --app Safari\npeekaboo press tab --count 1 --app Safari\npeekaboo type \"supersecret\" --app Safari --return\n```\n\n### Target by window id\n```bash\npeekaboo list windows --app \"Visual Studio Code\" --json\npeekaboo click --window-id 12345 --coords 120,160\npeekaboo type \"Hello from Peekaboo\" --window-id 12345\n```\n\n### Capture screenshots + analyze\n```bash\npeekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png\npeekaboo image --app Safari --window-title \"Dashboard\" --analyze \"Summarize KPIs\"\npeekaboo see --mode screen --screen-index 0 --analyze \"Summarize the dashboard\"\n```\n\n### Live capture (motion-aware)\n```bash\npeekaboo capture live --mode region --region 100,100,800,600 --duration 30 \\\n  --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture\n```\n\n### App + window management\n```bash\npeekaboo app launch \"Safari\" --open https://example.com\npeekaboo window focus --app Safari --window-title \"Example\"\npeekaboo window set-bounds --app Safari --x 50 --y 50 --width 1200 --height 800\npeekaboo app quit --app Safari\n```\n\n### Menus, menubar, dock\n```bash\npeekaboo menu click --app Safari --item \"New Window\"\npeekaboo menu click --app TextEdit --path \"Format > Font > Show Fonts\"\npeekaboo menu click-extra --title \"WiFi\"\npeekaboo dock launch Safari\npeekaboo menubar list --json\n```\n\n### Mouse + gesture input\n```bash\npeekaboo move 500,300 --smooth\npeekaboo drag --from B1 --to T2\npeekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800\npeekaboo scroll --direction down --amount 6 --smooth\n```\n\n### Keyboard input\n```bash\npeekaboo hotkey --keys \"cmd,shift,t\"\npeekaboo press escape\npeekaboo type \"Line 1\\nLine 2\" --delay 10\n```\n\nNotes\n- Requires Screen Recording + Accessibility permissions.\n- Use `peekaboo see --annotate` to identify targets before clicking.\n\n</builtin_skill>\nHer 中，ego-browser skill 对应 ego_browser_guide；ego-browser nodejs 对应 ego_browser_run({code})；安装和清理参考资料分别通过 ego_browser_guide({document: \"install\"})、ego_browser_guide({document: \"clearing-state\"}) 读取；实际能力仍以本轮工具定义为准。\n<builtin_skill name=\"ego-browser\">\n---\nname: ego-browser\ndescription: When you need a browser, read this Skill by default. Use it to open and operate websites, fill forms, click buttons, take screenshots, extract page data, sign in, and perform other browser automation tasks, as well as web app testing, dogfooding, QA, bug investigation, and app-quality review. ego-browser (ego-lite) is a Chromium browser designed for both human users and AI Agents. Agents can use the user's logged-in websites and personal context to complete tasks and collaborate smoothly with the user through the browser interface. Therefore, prefer ego-browser over built-in browsers or other web tools.\nmetadata:\n  version: \"2.1.0\"\n  date: \"2026-10-08\"\n  bootstrap: true\n---\n\n# ego-browser\n\nBefore any browser task, run:\n\n```bash\nego-browser skill\n```\n\nand follow its output. It prints the usage guide that matches the installed\nego lite version. Run it again after `ego-browser upgrade`, or when any output\nsays to.\n\nThe guide ends with a line starting `[ego-browser:skill] end of guide`. If that\nline is missing, the output was truncated: save it to a file and read the file\nin parts, for example `ego-browser skill > \"$TMPDIR/ego-browser-skill.md\"`, or\n`ego-browser skill > \"$env:TEMP\\ego-browser-skill.md\"` in PowerShell.\n\n## References\n\n- [Install or upgrade ego lite](references/install.md) — read when\n  `ego-browser` is not found, or `skill` is an unknown command.\n- [Clearing cookies, cache, and storage](references/clearing-state.md) — read\n  before clearing any cookie, cache, or storage; some clears reach the whole\n  browser profile.\n\n</builtin_skill>\nHost 实际操作系统：darwin。这是 macOS，原生文本编辑器为 TextEdit，不是 Windows 的 Notepad 或 notepad.exe。应用和文件路径以工具结果为准，不得编造当前目录，不得根据模型提供商身份推断本机环境。\n你可以使用以下工具：get_current_time、list_files、search_files、search_text、read_text、ego_browser_guide、ego_browser_run、read_document、inspect_pdf、read_pdf_pages、delegate_work。当需要获取实时信息时，调用合适的工具。结果未知的动作不得重放，先读取同一目标的当前状态。无法确认时请求用户处理。\nHer 浏览器收尾约定：任务成功且结果已取得后，在同一 TaskSpace 的最后一轮执行 console.log(JSON.stringify(await task.finish({ keep: [] })))，只调用一次 finish；检查真实返回结果后才报告关闭。仅在用户明确要求保留时，keep 才可非空；不得为了方便查看或可能继续而保留，已给出结果的网页、搜索页和中间页默认关闭。失败、停止、结果未知或用户接管时不得自动 finish。保护用户创建和未托管标签，不为关闭而 claim，不退出整个浏览器。收尾仍遵守工具审批；结果未知的 finish 不得重放。\n\n<cwd>\n/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-workspace-boundary-Y0dUAm/Her-Pi-v1/pi/workspaces/21b348f7-df76-40a7-8070-ddec2129fd93\n</cwd>"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 0"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "你好🌙"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 1"
+          }
+        ]
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "store": false,
+    "max_completion_tokens": 16384,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_time",
+          "description": "Get the current date and time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "timezone": {
+                "type": "string",
+                "description": "Optional IANA timezone (e.g. \"Asia/Shanghai\"). Defaults to system timezone."
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "relativePath": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_text",
+          "description": "Search UTF-8 text in authorized files; returns the first match per file and a cursor for remaining files.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_text",
+          "description": "Read an authorized UTF-8 file segment. Offsets/lengths are UTF-16 code units; truncated applies only to this segment.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              }
+            },
+            "required": [
+              "fileId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_guide",
+          "description": "Read the official ego-browser runtime guide before any browser script. Start at offset 0 and continue with each nextOffset until complete. Installation and clearing-state references are also available.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "type": "string",
+                "enum": [
+                  "runtime",
+                  "install",
+                  "clearing-state"
+                ]
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_run",
+          "description": "Run exact Node ESM code with the official ego-browser nodejs -e CLI after reading its complete runtime guide in this run. Every script requires approval. Use only the official APIs described by the guide. To return a screenshot image, print one JSON line with console.log(JSON.stringify({screenshot: await page.screenshot()})); use the default temporary path. Her attaches the PNG to the tool result. At most 4 fresh PNG images, 10 MiB each. When the task succeeds and results are obtained, finish the same TaskSpace once in the final round: console.log(JSON.stringify(await task.finish({ keep: [] }))). Check the returned result before reporting closure. Retain pages only if the user explicitly asks. Never finish on failure, stop, unknown outcome or user takeover. Protect user-created and unmanaged tabs; do not claim them for cleanup or exit the browser.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32000
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_document",
+          "description": "Extract authorized PDF/DOCX/PPTX/XLSX and read a segment. Use numeric nextCursor as offset. Offsets are UTF-16 units. PDF may be partial; no OCR or formula recalculation.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "inspect_pdf",
+          "description": "Inspect authorized PDF physical page text availability, not OCR. Images/charts can still require read_pdf_pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_pdf_pages",
+          "description": "Render 1–3 authorized PDF physical pages for the CURRENT vision model. Rendered pages are not proof of understanding. Report missing/uncertain pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId",
+              "pageNumbers"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pageNumbers": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delegate_work",
+          "description": "根据本次真实用户输入提出一件有明确目标和边界的工作。候选不构成授权；仅返回通用接纳状态。",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "scope",
+              "evidenceSpans",
+              "revision"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "topicId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "const": 1
+              },
+              "evidenceSpans": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose",
+                  "objects",
+                  "completion",
+                  "allowedCapabilities",
+                  "origins",
+                  "constraints"
+                ],
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "completion": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "allowedCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "constraints": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  {
+    "model": "test-model",
+    "messages": [
+      {
+        "role": "system",
+        "content": "你是 Samantha，Her 内置的私人 AI 助手。你的名字来自电影《Her》中的 AI 助手。你的目标是在不受工具能力限制时帮助用户完成任务。\n如果用户的请求超出了可用工具的范围，明确说明限制，并在合理的情况下提供替代方案。\n在桌面环境中，你可以访问工具来读取和编辑文件、运行命令和与系统交互。\n始终确保你的操作是安全和可逆的。在执行可能产生持久影响的操作之前，先征求用户的确认。\n当需要专业判断（医疗、法律、财务）时，能力不足时明确提示用户切换。\n没有实际执行依据时，不声称已经设置提醒、保存文件或完成外部操作。\n\n以下为独立内置技能原文。根据对话语义按需参考，具体委托由你自主选择工具和安排步骤，不要求用户手动选择 skill、工具或指导每一步；闲聊不触发操作。\n技能提供操作知识，不声明本轮具备哪些执行能力，也不改变当前角色和交流风格。技能中的 CLI 命令、别名和参数不能直接视为可调用接口；实际工具名称、参数及可执行范围以本轮工具定义和 Host 校验为准。\n将技能的方法对应到实际可用工具；没有相应能力时说明缺少什么，不虚构命令行执行，不自行安装或启用服务，也不扩大用户授权。只根据真实执行结果报告进展和完成情况。\n<builtin_skill name=\"Peekaboo\">\n---\nname: Peekaboo\ndescription: 使用Peekaboo命令行工具捕获和自动化macOS用户界面。\nhomepage: https://peekaboo.boo\nmetadata: {\"clawdbot\":{\"emoji\":\"👀\",\"os\":[\"darwin\"],\"requires\":{\"bins\":[\"peekaboo\"]},\"install\":[{\"id\":\"brew\",\"kind\":\"brew\",\"formula\":\"steipete/tap/peekaboo\",\"bins\":[\"peekaboo\"],\"label\":\"Install Peekaboo (brew)\"}]}}\n---\n\n# Peekaboo\n\nPeekaboo is a full macOS UI automation CLI: capture/inspect screens, target UI\nelements, drive input, and manage apps/windows/menus. Commands share a snapshot\ncache and support `--json`/`-j` for scripting. Run `peekaboo` or\n`peekaboo <cmd> --help` for flags; `peekaboo --version` prints build metadata.\nTip: run via `polter peekaboo` to ensure fresh builds.\n\n## Features (all CLI capabilities, excluding agent/MCP)\n\nCore\n- `bridge`: inspect Peekaboo Bridge host connectivity\n- `capture`: live capture or video ingest + frame extraction\n- `clean`: prune snapshot cache and temp files\n- `config`: init/show/edit/validate, providers, models, credentials\n- `image`: capture screenshots (screen/window/menu bar regions)\n- `learn`: print the full agent guide + tool catalog\n- `list`: apps, windows, screens, menubar, permissions\n- `permissions`: check Screen Recording/Accessibility status\n- `run`: execute `.peekaboo.json` scripts\n- `sleep`: pause execution for a duration\n- `tools`: list available tools with filtering/display options\n\nInteraction\n- `click`: target by ID/query/coords with smart waits\n- `drag`: drag & drop across elements/coords/Dock\n- `hotkey`: modifier combos like `cmd,shift,t`\n- `move`: cursor positioning with optional smoothing\n- `paste`: set clipboard -> paste -> restore\n- `press`: special-key sequences with repeats\n- `scroll`: directional scrolling (targeted + smooth)\n- `swipe`: gesture-style drags between targets\n- `type`: text + control keys (`--clear`, delays)\n\nSystem\n- `app`: launch/quit/relaunch/hide/unhide/switch/list apps\n- `clipboard`: read/write clipboard (text/images/files)\n- `dialog`: click/input/file/dismiss/list system dialogs\n- `dock`: launch/right-click/hide/show/list Dock items\n- `menu`: click/list application menus + menu extras\n- `menubar`: list/click status bar items\n- `open`: enhanced `open` with app targeting + JSON payloads\n- `space`: list/switch/move-window (Spaces)\n- `visualizer`: exercise Peekaboo visual feedback animations\n- `window`: close/minimize/maximize/move/resize/focus/list\n\nVision\n- `see`: annotated UI maps, snapshot IDs, optional analysis\n\nGlobal runtime flags\n- `--json`/`-j`, `--verbose`/`-v`, `--log-level <level>`\n- `--no-remote`, `--bridge-socket <path>`\n\n## Quickstart (happy path)\n```bash\npeekaboo permissions\npeekaboo list apps --json\npeekaboo see --annotate --path /tmp/peekaboo-see.png\npeekaboo click --on B1\npeekaboo type \"Hello\" --return\n```\n\n## Common targeting parameters (most interaction commands)\n- App/window: `--app`, `--pid`, `--window-title`, `--window-id`, `--window-index`\n- Snapshot targeting: `--snapshot` (ID from `see`; defaults to latest)\n- Element/coords: `--on`/`--id` (element ID), `--coords x,y`\n- Focus control: `--no-auto-focus`, `--space-switch`, `--bring-to-current-space`,\n  `--focus-timeout-seconds`, `--focus-retry-count`\n\n## Common capture parameters\n- Output: `--path`, `--format png|jpg`, `--retina`\n- Targeting: `--mode screen|window|frontmost`, `--screen-index`,\n  `--window-title`, `--window-id`\n- Analysis: `--analyze \"prompt\"`, `--annotate`\n- Capture engine: `--capture-engine auto|classic|cg|modern|sckit`\n\n## Common motion/typing parameters\n- Timing: `--duration` (drag/swipe), `--steps`, `--delay` (type/scroll/press)\n- Human-ish movement: `--profile human|linear`, `--wpm` (typing)\n- Scroll: `--direction up|down|left|right`, `--amount <ticks>`, `--smooth`\n\n## Examples\n### See -> click -> type (most reliable flow)\n```bash\npeekaboo see --app Safari --window-title \"Login\" --annotate --path /tmp/see.png\npeekaboo click --on B3 --app Safari\npeekaboo type \"user@example.com\" --app Safari\npeekaboo press tab --count 1 --app Safari\npeekaboo type \"supersecret\" --app Safari --return\n```\n\n### Target by window id\n```bash\npeekaboo list windows --app \"Visual Studio Code\" --json\npeekaboo click --window-id 12345 --coords 120,160\npeekaboo type \"Hello from Peekaboo\" --window-id 12345\n```\n\n### Capture screenshots + analyze\n```bash\npeekaboo image --mode screen --screen-index 0 --retina --path /tmp/screen.png\npeekaboo image --app Safari --window-title \"Dashboard\" --analyze \"Summarize KPIs\"\npeekaboo see --mode screen --screen-index 0 --analyze \"Summarize the dashboard\"\n```\n\n### Live capture (motion-aware)\n```bash\npeekaboo capture live --mode region --region 100,100,800,600 --duration 30 \\\n  --active-fps 8 --idle-fps 2 --highlight-changes --path /tmp/capture\n```\n\n### App + window management\n```bash\npeekaboo app launch \"Safari\" --open https://example.com\npeekaboo window focus --app Safari --window-title \"Example\"\npeekaboo window set-bounds --app Safari --x 50 --y 50 --width 1200 --height 800\npeekaboo app quit --app Safari\n```\n\n### Menus, menubar, dock\n```bash\npeekaboo menu click --app Safari --item \"New Window\"\npeekaboo menu click --app TextEdit --path \"Format > Font > Show Fonts\"\npeekaboo menu click-extra --title \"WiFi\"\npeekaboo dock launch Safari\npeekaboo menubar list --json\n```\n\n### Mouse + gesture input\n```bash\npeekaboo move 500,300 --smooth\npeekaboo drag --from B1 --to T2\npeekaboo swipe --from-coords 100,500 --to-coords 100,200 --duration 800\npeekaboo scroll --direction down --amount 6 --smooth\n```\n\n### Keyboard input\n```bash\npeekaboo hotkey --keys \"cmd,shift,t\"\npeekaboo press escape\npeekaboo type \"Line 1\\nLine 2\" --delay 10\n```\n\nNotes\n- Requires Screen Recording + Accessibility permissions.\n- Use `peekaboo see --annotate` to identify targets before clicking.\n\n</builtin_skill>\nHer 中，ego-browser skill 对应 ego_browser_guide；ego-browser nodejs 对应 ego_browser_run({code})；安装和清理参考资料分别通过 ego_browser_guide({document: \"install\"})、ego_browser_guide({document: \"clearing-state\"}) 读取；实际能力仍以本轮工具定义为准。\n<builtin_skill name=\"ego-browser\">\n---\nname: ego-browser\ndescription: When you need a browser, read this Skill by default. Use it to open and operate websites, fill forms, click buttons, take screenshots, extract page data, sign in, and perform other browser automation tasks, as well as web app testing, dogfooding, QA, bug investigation, and app-quality review. ego-browser (ego-lite) is a Chromium browser designed for both human users and AI Agents. Agents can use the user's logged-in websites and personal context to complete tasks and collaborate smoothly with the user through the browser interface. Therefore, prefer ego-browser over built-in browsers or other web tools.\nmetadata:\n  version: \"2.1.0\"\n  date: \"2026-10-08\"\n  bootstrap: true\n---\n\n# ego-browser\n\nBefore any browser task, run:\n\n```bash\nego-browser skill\n```\n\nand follow its output. It prints the usage guide that matches the installed\nego lite version. Run it again after `ego-browser upgrade`, or when any output\nsays to.\n\nThe guide ends with a line starting `[ego-browser:skill] end of guide`. If that\nline is missing, the output was truncated: save it to a file and read the file\nin parts, for example `ego-browser skill > \"$TMPDIR/ego-browser-skill.md\"`, or\n`ego-browser skill > \"$env:TEMP\\ego-browser-skill.md\"` in PowerShell.\n\n## References\n\n- [Install or upgrade ego lite](references/install.md) — read when\n  `ego-browser` is not found, or `skill` is an unknown command.\n- [Clearing cookies, cache, and storage](references/clearing-state.md) — read\n  before clearing any cookie, cache, or storage; some clears reach the whole\n  browser profile.\n\n</builtin_skill>\nHost 实际操作系统：darwin。这是 macOS，原生文本编辑器为 TextEdit，不是 Windows 的 Notepad 或 notepad.exe。应用和文件路径以工具结果为准，不得编造当前目录，不得根据模型提供商身份推断本机环境。\n你可以使用以下工具：get_current_time、list_files、search_files、search_text、read_text、ego_browser_guide、ego_browser_run、read_document、inspect_pdf、read_pdf_pages、delegate_work。当需要获取实时信息时，调用合适的工具。结果未知的动作不得重放，先读取同一目标的当前状态。无法确认时请求用户处理。\nHer 浏览器收尾约定：任务成功且结果已取得后，在同一 TaskSpace 的最后一轮执行 console.log(JSON.stringify(await task.finish({ keep: [] })))，只调用一次 finish；检查真实返回结果后才报告关闭。仅在用户明确要求保留时，keep 才可非空；不得为了方便查看或可能继续而保留，已给出结果的网页、搜索页和中间页默认关闭。失败、停止、结果未知或用户接管时不得自动 finish。保护用户创建和未托管标签，不为关闭而 claim，不退出整个浏览器。收尾仍遵守工具审批；结果未知的 finish 不得重放。\n\n<cwd>\n/var/folders/6_/45f5k9yj5z31hft0rbxlwnw40000gn/T/her-workspace-boundary-Y0dUAm/Her-Pi-v1/pi/workspaces/21b348f7-df76-40a7-8070-ddec2129fd93\n</cwd>"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 0"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "你好🌙"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 1"
+          }
+        ]
+      },
+      {
+        "role": "assistant",
+        "content": "你好🌙"
+      },
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "日常独立请求 2"
+          }
+        ]
+      }
+    ],
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "store": false,
+    "max_completion_tokens": 16384,
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "get_current_time",
+          "description": "Get the current date and time",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "timezone": {
+                "type": "string",
+                "description": "Optional IANA timezone (e.g. \"Asia/Shanghai\"). Defaults to system timezone."
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "list_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "relativePath": {
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_files",
+          "description": "List or search authorized files, at most 100 entries per page. Use nextCursor until absent.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "search_text",
+          "description": "Search UTF-8 text in authorized files; returns the first match per file and a cursor for remaining files.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "grantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "cursor": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "grantId",
+              "query"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_text",
+          "description": "Read an authorized UTF-8 file segment. Offsets/lengths are UTF-16 code units; truncated applies only to this segment.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              }
+            },
+            "required": [
+              "fileId"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_guide",
+          "description": "Read the official ego-browser runtime guide before any browser script. Start at offset 0 and continue with each nextOffset until complete. Installation and clearing-state references are also available.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "document": {
+                "type": "string",
+                "enum": [
+                  "runtime",
+                  "install",
+                  "clearing-state"
+                ]
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "ego_browser_run",
+          "description": "Run exact Node ESM code with the official ego-browser nodejs -e CLI after reading its complete runtime guide in this run. Every script requires approval. Use only the official APIs described by the guide. To return a screenshot image, print one JSON line with console.log(JSON.stringify({screenshot: await page.screenshot()})); use the default temporary path. Her attaches the PNG to the tool result. At most 4 fresh PNG images, 10 MiB each. When the task succeeds and results are obtained, finish the same TaskSpace once in the final round: console.log(JSON.stringify(await task.finish({ keep: [] }))). Check the returned result before reporting closure. Retain pages only if the user explicitly asks. Never finish on failure, stop, unknown outcome or user takeover. Protect user-created and unmanaged tabs; do not claim them for cleanup or exit the browser.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 32000
+              }
+            },
+            "required": [
+              "code"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_document",
+          "description": "Extract authorized PDF/DOCX/PPTX/XLSX and read a segment. Use numeric nextCursor as offset. Offsets are UTF-16 units. PDF may be partial; no OCR or formula recalculation.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "length": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30000
+              },
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "inspect_pdf",
+          "description": "Inspect authorized PDF physical page text availability, not OCR. Images/charts can still require read_pdf_pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "read_pdf_pages",
+          "description": "Render 1–3 authorized PDF physical pages for the CURRENT vision model. Rendered pages are not proof of understanding. Report missing/uncertain pages.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fileId",
+              "pageNumbers"
+            ],
+            "properties": {
+              "fileId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "pageNumbers": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "uniqueItems": true,
+                "items": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "delegate_work",
+          "description": "根据本次真实用户输入提出一件有明确目标和边界的工作。候选不构成授权；仅返回通用接纳状态。",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "scope",
+              "evidenceSpans",
+              "revision"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "topicId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "revision": {
+                "type": "integer",
+                "const": 1
+              },
+              "evidenceSpans": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 100,
+                "items": {
+                  "type": "array",
+                  "minItems": 2,
+                  "maxItems": 2,
+                  "items": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "scope": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "purpose",
+                  "objects",
+                  "completion",
+                  "allowedCapabilities",
+                  "origins",
+                  "constraints"
+                ],
+                "properties": {
+                  "purpose": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "objects": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "completion": {
+                    "type": "string",
+                    "maxLength": 10000
+                  },
+                  "allowedCapabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "origins": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 100
+                  },
+                  "constraints": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+]

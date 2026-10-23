@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { SimpleToolRegistry } from '../src/core/tools/registry'
 import { MODEL_RETRIES } from '../src/core/agent/factory'
 import { startFixtureServer, TOOL_NAME, type Protocol, type Scenario } from './pi-sdk/wire'
-import { harness, harnessCleanup } from './helpers/host-harness'
+import { approveNextTool, harness, harnessCleanup } from './helpers/host-harness'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
@@ -11,8 +11,9 @@ const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms
 async function run(protocol: Protocol, scenarios: Scenario[], toolsFor?: ConstructorParameters<typeof import('../src/core/agent/host').AgentHost>[3]) {
   const s = await startFixtureServer(protocol, scenarios); cleanup.push(s.close)
   const f = harness(undefined, toolsFor)
-  const p = await f.profiles.save({ name: 'p', protocol, baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+  const p = await f.profiles.save({ name: 'p', protocol, baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
   const sent = await f.send(f.id, p.id, 'hi')
+  if (toolsFor) await approveNextTool(f.chat, f.id)
   await expect.poll(() => f.finished(sent.requestId)?.state, { timeout: 20_000, interval: 50 }).toBeDefined()
   return { s, f, final: f.finished(sent.requestId)!, reply: (await f.chat.getMessages(f.id)).at(-1)! }
 }
@@ -69,7 +70,7 @@ describe('what is never retried', () => {
   it('a stopped reply is not started again', async () => {
     const s = await startFixtureServer('openai', ['hang', 'text']); cleanup.push(s.close)
     const f = harness()
-    const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', authMethod: 'none' })
+    const p = await f.profiles.save({ name: 'p', protocol: 'openai', baseUrl: s.baseUrl + '/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
     const sent = await f.send(f.id, p.id, 'hi')
     await expect.poll(() => s.requests.length).toBe(1)
     f.chat.cancel(sent.requestId)

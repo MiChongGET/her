@@ -28,7 +28,7 @@ const service = (patch: Partial<StoredService> = {}): StoredService => ({
   sealedSecrets: null, hasApiKey: false, hasCustomHeaders: false, maxOutputTokens: null, contextWindow: null,
   models: [{ id: 'm1', longOutput: false, multimodal: false, tests: untestedConnections() }], revision: 1, tests: untestedConnections(), ...patch
 })
-const settings = (patch: object = {}) => ({ activeProfileId: null, shortcut: 'CommandOrControl+Shift+H', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false, ...patch })
+const settings = (patch: object = {}) => ({ activeProfileId: null, shortcut: 'CommandOrControl+Shift+H', stopShortcut: 'CommandOrControl+Shift+Escape', launchAtLogin: false, appearance: 'light' as const, ...patch })
 
 describe('schema', () => {
   it('creates the Her-Pi v1 tables and nothing from the pre-Pi layout', () => {
@@ -68,6 +68,92 @@ describe('schema', () => {
     const id = conversation(store)
     expect(store.hasConversation(id)).toBe(true)
     expect(store.artifactDirectory).toBe('')
+  })
+})
+
+describe('companion topics', () => {
+  it('initial_title_survives_reopen_and_custom_rename_wins', () => {
+    const { store, path } = open()
+    store.createWorkConversation('topic-title', 'pi-title', '新对话')
+    store.enqueueInput('topic-title', '今天想去河边走一走', null, 'first', { initialTitleText: ' 今天想去河边走一走 ' })
+    store.enqueueInput('topic-title', '第二句', null, 'second', { initialTitleText: '第二句' })
+    expect(store.getConversation('topic-title')?.title).toBe('今天想去河边走一走')
+    store.renameConversation('topic-title', '我们的小计划')
+    store.enqueueInput('topic-title', '第三句', null, 'third', { initialTitleText: '第三句' })
+    store.close()
+    expect(open(path).store.getConversation('topic-title')?.title).toBe('我们的小计划')
+    const { store: samePlaceholder } = open()
+    samePlaceholder.createWorkConversation('placeholder', 'pi-placeholder', '新对话')
+    samePlaceholder.enqueueInput('placeholder', '新对话', null, 'p1', { initialTitleText: '新对话' })
+    samePlaceholder.enqueueInput('placeholder', '不能再覆盖', null, 'p2', { initialTitleText: '不能再覆盖' })
+    expect(samePlaceholder.getConversation('placeholder')?.title).toBe('新对话')
+    const daily = samePlaceholder.ensureDailyConversation()
+    samePlaceholder.enqueueInput(daily.id, '早上好', null, 'daily-title', { initialTitleText: '早上好' })
+    expect(samePlaceholder.getConversation(daily.id)?.title).toBe(daily.title)
+  })
+
+  it('daily_identity_is_stable_and_does_not_promote_legacy', () => {
+    const { store, path } = open()
+    const a = conversation(store, '旧工作 A'), b = conversation(store, '旧工作 B')
+    for (const id of [a, b]) store.replaceMessageProjection(id, [{ entryId: 'e1', message: {
+      id: 'm1', conversationId: id, role: 'user', content: `private-${id}`, status: 'complete', createdAt: '2026-10-20T00:00:00.000Z'
+    } }], 'e1')
+    const legacyA = store.getConversation(a)!, legacyB = store.getConversation(b)!
+    const messagesA = store.getMessages(a), messagesB = store.getMessages(b)
+    const daily = store.ensureDailyConversation()
+    expect([legacyA.id, legacyB.id]).not.toContain(daily.id)
+    expect([legacyA.piSessionId, legacyB.piSessionId]).not.toContain(daily.piSessionId)
+    expect(store.ensureDailyConversation()).toEqual(daily)
+    expect(store.getConversation(legacyA.id)).toEqual(legacyA)
+    expect(store.getConversation(legacyB.id)).toEqual(legacyB)
+    expect(store.getMessages(a)).toEqual(messagesA)
+    expect(store.getMessages(b)).toEqual(messagesB)
+    expect(store.getMessages(daily.id)).toEqual([])
+    expect(store.getTopicInfo(legacyA.id)).toBeNull()
+    expect(store.getTopicInfo(legacyB.id)).toBeNull()
+    expect(store.getTopicInfo(daily.id)).toEqual({ conversationId: daily.id, kind: 'daily', shareProgress: false, shareRevision: 1 })
+    store.close()
+    const reopened = open(path).store
+    expect(reopened.ensureDailyConversation()).toEqual(daily)
+    expect(reopened.getConversation(a)).toEqual(legacyA)
+    expect(reopened.getConversation(b)).toEqual(legacyB)
+    expect(reopened.getMessages(a)).toEqual(messagesA)
+    expect(reopened.getMessages(b)).toEqual(messagesB)
+    expect(reopened.listTopicInfo()).toEqual([{ conversationId: daily.id, kind: 'daily', shareProgress: false, shareRevision: 1 }])
+    expect(raw(path, db => (db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)).toBe(1)
+  })
+
+  it('creates work topics with sharing defaults without classifying legacy conversations', () => {
+    const { store, path } = open()
+    const legacy = conversation(store)
+    const topic = store.createWorkConversation('work', 'work-pi', '独立工作')
+    expect(topic).toEqual({ conversationId: 'work', kind: 'work', shareProgress: true, shareRevision: 1 })
+    expect(store.getConversation('work')).toMatchObject({ id: 'work', piSessionId: 'work-pi', title: '独立工作' })
+    expect(store.getTopicInfo(legacy)).toBeNull()
+    expect(store.getTopicInfo('missing')).toBeNull()
+    store.close()
+    expect(open(path).store.listTopicInfo()).toEqual([topic])
+  })
+
+  it('keeps one daily identity across independent store handles', () => {
+    const { store, path } = open()
+    const second = open(path).store
+    const daily = store.ensureDailyConversation()
+    expect(second.ensureDailyConversation()).toEqual(daily)
+    expect(store.listTopicInfo()).toHaveLength(1)
+    expect(store.listConversations()).toHaveLength(1)
+  })
+
+  it('initializes a fresh daily after permanently purging its pointer target', () => {
+    const { store } = open()
+    const old = store.ensureDailyConversation()
+    store.trashConversation(old.id)
+    store.purgeConversation(old.id)
+    const current = store.ensureDailyConversation()
+    expect(current.id).not.toBe(old.id)
+    expect(store.getConversation(old.id)).toBeNull()
+    expect(store.getTopicInfo(old.id)).toBeNull()
+    expect(store.listTopicInfo()).toEqual([{ conversationId: current.id, kind: 'daily', shareProgress: false, shareRevision: 1 }])
   })
 })
 
@@ -300,12 +386,12 @@ describe('purging', () => {
       count('tool_calls', 'task_id', `t-${kept}`), count('draft_fragments', 'task_id', `t-${kept}`)]).toEqual([1, 1, 1, 1, 1])
   })
 
-  it('clears the quarantine entries the purged conversation caused, and only those', () => {
+  it('retains external target quarantine even when the owning conversation is purged', () => {
     const { store } = open()
     const gone = conversation(store), kept = conversation(store)
     store.quarantineTarget('a', gone, 't1', 'c1'); store.quarantineTarget('b', kept, 't2', 'c2')
     store.trashConversation(gone); store.purgeConversation(gone)
-    expect(store.listQuarantinedTargets()).toEqual(['b'])
+    expect(store.listQuarantinedTargets()).toEqual(['a', 'b'])
   })
 
   it('removes several at once, all or nothing', () => {

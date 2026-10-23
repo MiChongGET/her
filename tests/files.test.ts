@@ -22,7 +22,7 @@ async function setup() {
   const lifetime = new AbortController()
   const access = new FileAccessService(store, lifetime.signal)
   const registry = new SimpleToolRegistry(); registerFileTools(registry, access)
-  const context = { conversationId, runId: 'run', callId: 'call', signal: new AbortController().signal }
+  const context = { conversationId, runId: 'run', callId: 'call', signal: new AbortController().signal, authorize: async () => {} }
   const directory = join(root, 'allowed'); await mkdir(directory)
   return { root, directory, store, access, registry, context, other, lifetime }
 }
