@@ -408,6 +408,37 @@ export interface BuiltinSkill {
   enabled: boolean
 }
 
+export interface SystemPromptPart {
+  id: string
+  title: string
+  source: string
+  content: string
+  status: 'included' | 'conditional' | 'omitted'
+}
+
+export interface SystemPromptSnapshot {
+  conversationId: string
+  profileId: string
+  model: string
+  usedAt: string
+  text: string
+  parts: SystemPromptPart[]
+  toolNames: string[]
+}
+
+export interface SystemPromptPreviewInput {
+  prompt: string
+  profileId?: string
+  conversationId?: string
+  model?: string
+}
+
+export interface SystemPromptPreview {
+  parts: SystemPromptPart[]
+  contextWindow: number | null
+  actual: SystemPromptSnapshot | null
+}
+
 export interface BootstrapState {
   profiles: ProviderProfile[]
   dailyConversationId: string
@@ -688,6 +719,7 @@ export interface HerApi {
   setSkillEnabled(id: string, enabled: boolean): Promise<BuiltinSkill[]>
   setSystemPrompt(prompt: string): Promise<void>
   getDefaultSystemPrompt(): Promise<string>
+  previewSystemPrompt(input: SystemPromptPreviewInput): Promise<SystemPromptPreview>
   onWorkspaceChatEvent(callback: (event: WorkspaceChatEvent) => void): () => void
   openExternal(url: string): Promise<void>
 }

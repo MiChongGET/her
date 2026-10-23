@@ -141,6 +141,7 @@ const api: HerApi = {
   setSkillEnabled: createIpcProxy('her:skills-enable', (id, enabled) => ipcRenderer.invoke('her:skills-enable', id, enabled)),
   setSystemPrompt: createIpcProxy('her:system-prompt-set', prompt => ipcRenderer.invoke('her:system-prompt-set', prompt)),
   getDefaultSystemPrompt: createIpcProxy('her:system-prompt-default', () => ipcRenderer.invoke('her:system-prompt-default')),
+  previewSystemPrompt: createIpcProxy('her:system-prompt-preview', input => ipcRenderer.invoke('her:system-prompt-preview', input)),
   onWorkspaceChatEvent: callback => {
     const listener = (_event: Electron.IpcRendererEvent, payload: WorkspaceChatEvent) => {
       if (isDev) console.log('[IPC] ← her:workspace-chat-event')

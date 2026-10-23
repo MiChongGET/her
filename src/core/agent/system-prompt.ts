@@ -1,5 +1,6 @@
 import { builtinSkillsPrompt } from '../skills/builtin'
 import { estimateTextTokens } from './budget'
+import type { SystemPromptPart } from '../../shared/types'
 
 /** The skill documents are sent only while they stay a modest share of the window, so a small model can still hold a conversation. */
 export const SKILLS_MAX_WINDOW_SHARE = 0.25
@@ -14,12 +15,23 @@ export function skillsFit(contextWindow: number, disabledSkillIds: string[] = []
  * The prompt the model actually gets: the user's own prompt, the bundled skill documents when the window can afford them,
  * and, when tools are present, the real host platform and the tool names. Skills never declare capabilities; tool definitions do.
  */
-export function buildSystemPrompt(base: string, toolNames: string[], options: { contextWindow: number; platform?: string; disabledSkillIds?: string[] }): string {
+export function systemPromptParts(base: string, toolNames: string[] | undefined, options: { contextWindow: number; platform?: string; disabledSkillIds?: string[] }): SystemPromptPart[] {
   const platform = options.platform ?? process.platform
   const skills = builtinSkillsPrompt(options.disabledSkillIds)
-  const withSkills = skills && skillsFit(options.contextWindow, options.disabledSkillIds) ? `${base}\n\n${skills}` : base
-  if (!toolNames.length) return withSkills
+  const includeSkills = !!skills && skillsFit(options.contextWindow, options.disabledSkillIds)
+  const parts: SystemPromptPart[] = [
+    { id: 'base', title: '基础提示词', source: '全局编辑内容', content: base, status: 'included' },
+    { id: 'skills', title: '内置技能', source: '已启用技能与模型窗口预算', content: includeSkills ? skills : skills ? '当前模型窗口不足，内置技能原文未加入。' : '没有启用的内置技能。', status: includeSkills ? 'included' : 'omitted' }
+  ]
+  if (toolNames?.length === 0) return parts
+  const status = toolNames === undefined ? 'conditional' : 'included'
   const environment = `Host 实际操作系统：${platform}。${platform === 'darwin' ? '这是 macOS，原生文本编辑器为 TextEdit，不是 Windows 的 Notepad 或 notepad.exe。' : ''}应用和文件路径以工具结果为准，不得编造当前目录，不得根据模型提供商身份推断本机环境。`
-  const completion = toolNames.includes('ego_browser_run') ? `\n${BROWSER_COMPLETION}` : ''
-  return `${withSkills}\n${environment}\n你可以使用以下工具：${toolNames.join('、')}。当需要获取实时信息时，调用合适的工具。结果未知的动作不得重放，先读取同一目标的当前状态。无法确认时请求用户处理。${completion}`
+  parts.push({ id: 'environment', title: '运行环境', source: 'Host 自动生成；存在工具时加入', content: environment, status })
+  parts.push({ id: 'tools', title: '工具与权限', source: 'Host 工具发现与审批机制', content: `${toolNames ? `你可以使用以下工具：${toolNames.join('、')}。` : '工具集合尚未发现，实际名称在请求准备时生成。'}当需要获取实时信息时，调用合适的工具。结果未知的动作不得重放，先读取同一目标的当前状态。无法确认时请求用户处理。`, status })
+  if (!toolNames || toolNames.includes('ego_browser_run')) parts.push({ id: 'browser', title: '浏览器收尾', source: 'Host 自动生成；存在浏览器执行工具时加入', content: BROWSER_COMPLETION, status })
+  return parts
+}
+
+export function buildSystemPrompt(base: string, toolNames: string[], options: { contextWindow: number; platform?: string; disabledSkillIds?: string[] }): string {
+  return systemPromptParts(base, toolNames, options).filter(part => part.status === 'included').map(part => part.content).join('\n\n')
 }

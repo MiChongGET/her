@@ -456,5 +456,20 @@ export function registerIpc(deps: IpcDependencies): void {
     deps.store.setSettings({ ...settings, systemPrompt: prompt || undefined })
   })
   handle('her:system-prompt-default', () => SYSTEM)
+  handle('her:system-prompt-preview', input => {
+    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('提示词预览参数不正确。')
+    const value = input as Record<string, unknown>
+    if (Object.keys(value).some(key => !['prompt', 'profileId', 'conversationId', 'model'].includes(key)) ||
+      typeof value.prompt !== 'string' || value.prompt.length > 16384 ||
+      (value.model !== undefined && (typeof value.model !== 'string' || !value.model || value.model.length > 2048))) throw new Error('提示词预览参数不正确。')
+    const conversationId = value.conversationId === undefined ? undefined : identifier(value.conversationId)
+    const profileId = value.profileId === undefined ? undefined : identifier(value.profileId)
+    if (value.model !== undefined && !profileId) throw new Error('提示词预览参数不正确。')
+    if (conversationId) deps.workspace.assertSelected(conversationId)
+    return deps.chat.previewSystemPrompt({ prompt: value.prompt, profileId, conversationId, model: value.model as string | undefined }).then(result => {
+      if (conversationId) deps.workspace.assertSelected(conversationId)
+      return result
+    }).catch(() => { throw new Error('提示词预览未能加载，请重试并确认当前话题与模型仍可用。') })
+  })
   handle('her:external', url => shell.openExternal(externalUrl(url)))
 }

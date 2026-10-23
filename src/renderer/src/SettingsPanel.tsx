@@ -4,11 +4,14 @@ import { Icon } from './Visuals'
 import FileAccessPanel from './FileAccessPanel'
 import McpSettingsPanel from './McpSettingsPanel'
 import SkillsPanel from './SkillsPanel'
+import SystemPromptSettings from './SystemPromptSettings'
 
 interface Props {
   profiles: ProviderProfile[]
   settings: DesktopSettings
   initialProfileId?: string
+  conversationId?: string
+  promptModel?: string
   dataDirectory: string
   onRevokeFileGrant?(grant: FileGrant): Promise<void>
   onClose(): void
@@ -52,9 +55,6 @@ export default function SettingsPanel(props: Props) {
   const [launchAtLogin, setLaunchAtLogin] = useState(props.settings.launchAtLogin)
   const [appearance, setAppearance] = useState(props.settings.appearance)
   const [appearanceBusy, setAppearanceBusy] = useState(false)
-  const [systemPrompt, setSystemPrompt] = useState('')
-  const [defaultSystemPrompt, setDefaultSystemPrompt] = useState('')
-  const [systemPromptReady, setSystemPromptReady] = useState(false)
   const [busy, setBusy] = useState(false)
   const [testing, setTesting] = useState<TestKind | null>(null)
   const [error, setError] = useState('')
@@ -98,7 +98,7 @@ export default function SettingsPanel(props: Props) {
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === 'Escape') closeRef.current()
       if (event.key !== 'Tab' || !dialog) return
-      const elements = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')]
+      const elements = [...dialog.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]')].filter(element => !element.closest('[hidden]'))
       const first = elements[0]
       const last = elements.at(-1)
       if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) { event.preventDefault(); last?.focus() }
@@ -106,12 +106,6 @@ export default function SettingsPanel(props: Props) {
     }
     dialog?.addEventListener('keydown', onKeyDown)
     window.her.listModelCatalog().then(models => { if (mounted.current) setCatalog(models) }).catch(() => { if (mounted.current) setError('无法加载 Pi 模型目录，请重试。') })
-    Promise.all([window.her.getSystemPrompt(), window.her.getDefaultSystemPrompt()]).then(([current, defaultPrompt]) => {
-      if (!mounted.current) return
-      setDefaultSystemPrompt(defaultPrompt)
-      setSystemPrompt(current || defaultPrompt)
-      setSystemPromptReady(true)
-    }).catch(() => { if (mounted.current) setError('系统提示词加载失败，请关闭设置后重试。') })
     return () => { mounted.current = false; dialog?.removeEventListener('keydown', onKeyDown) }
   }, [])
 
@@ -229,21 +223,6 @@ export default function SettingsPanel(props: Props) {
     finally { if (mounted.current) setAppearanceBusy(false) }
   }
 
-  async function saveSystemPrompt(event: React.FormEvent) {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    setNotice('')
-    try {
-      const prompt = systemPrompt.trim()
-      await window.her.setSystemPrompt(prompt === defaultSystemPrompt.trim() ? '' : prompt)
-      if (!mounted.current) return
-      setSystemPrompt(prompt || defaultSystemPrompt)
-      setNotice('系统提示词已保存')
-    } catch (cause) { if (mounted.current) setError(messageOf(cause)) }
-    finally { if (mounted.current) setBusy(false) }
-  }
-
   return <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) props.onClose() }}>
     <div className="settings-dialog settings-panel-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabIndex={-1} ref={dialogRef}>
       <header className="settings-header"><div><h2 id="settings-title">设置</h2><p className="eyebrow">让这里更合你的习惯。</p></div><button className="icon-button" aria-label="关闭设置" onClick={props.onClose}><Icon name="close" /></button></header>
@@ -296,7 +275,8 @@ export default function SettingsPanel(props: Props) {
               <div className="form-actions profile-actions"><button className="primary-button" type="submit" form="profile-form" disabled={busy}>{busy && !testing ? '正在保存…' : '保存服务'}</button>{profile && <button className="text-button danger" type="button" disabled={busy} onClick={() => setConfirmDelete(!confirmDelete)}><Icon name="trash" />删除服务</button>}</div>
             </div>
           </div>
-        </div> : tab === 'desktop' ? <form className="desktop-settings" onSubmit={(event) => void savePreferences(event)}><h3>随时回来聊聊。</h3><p className="desktop-intro">关闭窗口后，Her 会留在菜单栏。使用快捷键就能唤出她。</p><fieldset className="appearance-settings" disabled={appearanceBusy}><legend>外观</legend><div className="appearance-options" role="radiogroup" aria-label="外观">{([['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']] as const).map(([value, label]) => <label key={value} className={appearance === value ? 'selected' : ''}><input type="radio" name="appearance" value={value} checked={appearance === value} onChange={() => void changeAppearance(value)} />{label}</label>)}</div><small>选择后立即生效，并自动保存到这台设备。</small></fieldset><label className="field">唤出快捷键<input aria-label="唤出快捷键" required value={shortcut} onChange={(event) => setShortcut(event.target.value)} placeholder="CommandOrControl+Shift+H" /><small>例如 CommandOrControl+Shift+H。快捷键被占用时会提示你更换。</small></label><label className="field">全局停止快捷键<input aria-label="全局停止快捷键" value={stopShortcut} onChange={event => setStopShortcut(event.target.value)} placeholder="CommandOrControl+Shift+Escape" /><small>窗口隐藏时也能停止当前任务；停止不代表撤销已发生的动作。</small></label><label className="checkbox-field desktop-checkbox"><input type="checkbox" aria-label="登录时启动 Her" checked={launchAtLogin} onChange={(event) => setLaunchAtLogin(event.target.checked)} /><span>登录时启动 Her<small>安装版可用。在你登录 Mac 后，让 Her 在菜单栏待命。</small></span></label><button className="primary-button" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存偏好'}</button><div className="data-directory"><span>本地数据目录</span><code>{props.dataDirectory}</code><small>聊天记录保存在本机，模型推理使用你选择的云端服务。</small></div></form> : <form className="system-prompt-settings" onSubmit={(event) => void saveSystemPrompt(event)}><h3>系统提示词</h3><p className="desktop-intro">直接编辑当前提示词，定义 Samantha 的性格和行为方式。留空使用默认提示词。</p><label className="field">当前提示词<textarea aria-label="系统提示词" rows={12} spellCheck={false} maxLength={16384} disabled={!systemPromptReady || busy} value={systemPrompt} onChange={(event) => setSystemPrompt(event.target.value)} placeholder="提示词加载后可编辑" /><small>系统提示词会影响 Samantha 的回答风格和行为。保存后，下次发送或继续对话时生效，正在运行的任务不受影响。{systemPrompt && <span className="char-count"> · 已输入 {systemPrompt.length} / 16384 字符</span>}</small></label><div className="form-actions"><button className="primary-button" type="submit" disabled={busy || !systemPromptReady}>{busy ? '正在保存…' : '保存提示词'}</button><button className="text-button" type="button" disabled={busy || !systemPromptReady || systemPrompt === defaultSystemPrompt} onClick={() => setSystemPrompt(defaultSystemPrompt)}>恢复默认</button></div></form>}
+        </div> : tab === 'desktop' ? <form className="desktop-settings" onSubmit={(event) => void savePreferences(event)}><h3>随时回来聊聊。</h3><p className="desktop-intro">关闭窗口后，Her 会留在菜单栏。使用快捷键就能唤出她。</p><fieldset className="appearance-settings" disabled={appearanceBusy}><legend>外观</legend><div className="appearance-options" role="radiogroup" aria-label="外观">{([['light', '浅色'], ['dark', '深色'], ['system', '跟随系统']] as const).map(([value, label]) => <label key={value} className={appearance === value ? 'selected' : ''}><input type="radio" name="appearance" value={value} checked={appearance === value} onChange={() => void changeAppearance(value)} />{label}</label>)}</div><small>选择后立即生效，并自动保存到这台设备。</small></fieldset><label className="field">唤出快捷键<input aria-label="唤出快捷键" required value={shortcut} onChange={(event) => setShortcut(event.target.value)} placeholder="CommandOrControl+Shift+H" /><small>例如 CommandOrControl+Shift+H。快捷键被占用时会提示你更换。</small></label><label className="field">全局停止快捷键<input aria-label="全局停止快捷键" value={stopShortcut} onChange={event => setStopShortcut(event.target.value)} placeholder="CommandOrControl+Shift+Escape" /><small>窗口隐藏时也能停止当前任务；停止不代表撤销已发生的动作。</small></label><label className="checkbox-field desktop-checkbox"><input type="checkbox" aria-label="登录时启动 Her" checked={launchAtLogin} onChange={(event) => setLaunchAtLogin(event.target.checked)} /><span>登录时启动 Her<small>安装版可用。在你登录 Mac 后，让 Her 在菜单栏待命。</small></span></label><button className="primary-button" type="submit" disabled={busy}>{busy ? '正在保存…' : '保存偏好'}</button><div className="data-directory"><span>本地数据目录</span><code>{props.dataDirectory}</code><small>聊天记录保存在本机，模型推理使用你选择的云端服务。</small></div></form> : null}
+        <div hidden={tab !== 'system-prompt'}><SystemPromptSettings conversationId={props.conversationId} profileId={props.settings.activeProfileId ?? undefined} model={props.promptModel} onBusyChange={setBusy} /></div>
       </div>
       </div>
     </div>

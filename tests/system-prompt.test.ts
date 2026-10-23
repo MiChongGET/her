@@ -1,12 +1,40 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { SimpleToolRegistry } from '../src/core/tools/registry'
-import { buildSystemPrompt } from '../src/core/agent/system-prompt'
+import { buildSystemPrompt, systemPromptParts } from '../src/core/agent/system-prompt'
 import { BUILTIN_SKILLS_PROMPT } from '../src/core/skills/builtin'
 import { startFixtureServer, TOOL_NAME } from './pi-sdk/wire'
 import { harness, harnessCleanup } from './helpers/host-harness'
 
 const cleanup: (() => void | Promise<void>)[] = []
 afterEach(async () => { for (const close of [...cleanup.splice(0), ...harnessCleanup.splice(0)].reverse()) await close() })
+
+describe('prompt sources and draft conditions', () => {
+  it('renders the same included parts for runtime and preview', () => {
+    const options = { contextWindow: 200_000, platform: 'darwin' }
+    const parts = systemPromptParts('MY DRAFT', ['ego_browser_run'], options)
+    expect(parts[0]).toMatchObject({ id: 'base', content: 'MY DRAFT', status: 'included' })
+    expect(parts.every(part => part.source.length > 0)).toBe(true)
+    expect(parts.filter(part => part.status === 'included').map(part => part.content).join('\n\n'))
+      .toBe(buildSystemPrompt('MY DRAFT', ['ego_browser_run'], options))
+    expect(parts.find(part => part.id === 'browser')?.status).toBe('included')
+  })
+
+  it('marks undiscovered tools and their rules as conditional', () => {
+    const parts = systemPromptParts('draft', undefined, { contextWindow: 200_000, platform: 'darwin' })
+    expect(parts.find(part => part.id === 'tools')).toMatchObject({ status: 'conditional' })
+    expect(parts.find(part => part.id === 'environment')).toMatchObject({ status: 'conditional', content: expect.stringContaining('darwin') })
+    expect(parts.find(part => part.id === 'browser')?.status).toBe('conditional')
+    expect(parts.find(part => part.id === 'tools')?.content).not.toContain('undefined')
+  })
+
+  it('reports skipped skills for small windows and disabled skills', () => {
+    for (const options of [{ contextWindow: 2048 }, { contextWindow: 200_000, disabledSkillIds: ['peekaboo', 'ego-browser'] }]) {
+      const parts = systemPromptParts('draft', [], options)
+      expect(parts.find(part => part.id === 'skills')?.status).toBe('omitted')
+      expect(parts.filter(part => part.status === 'included').map(part => part.content).join('\n\n')).toBe('draft')
+    }
+  })
+})
 
 describe('buildSystemPrompt', () => {
   it('keeps the user prompt first and always appends the bundled skills', () => {

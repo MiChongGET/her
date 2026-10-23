@@ -76,6 +76,26 @@ function ipcFixture(realHost = false, revalidate = false) {
   return { publish, onChat, onRequest, host, directory, store, workspace, chat, profiles, configs, manager, lifetime, event, call: (channel: string, ...args: unknown[]) => electronMock.handlers.get(channel)!(event, ...args) }
 }
 
+it('validates prompt previews and rechecks the selected topic without starting MCP', async () => {
+  const f = ipcFixture(true)
+  try {
+    const prepare = vi.spyOn(f.manager, 'prepare')
+    const p = await f.profiles.save({ name: 'preview', protocol: 'openai', baseUrl: 'https://unused.example/v1', model: 'test-model', contextWindow: 128000, authMethod: 'none' })
+    const selected = await f.workspace.select({ section: 'daily' })
+    const input = { prompt: 'DRAFT', profileId: p.id, conversationId: selected.conversation!.id }
+    expect(await f.call('her:system-prompt-preview', input)).toMatchObject({ actual: null, parts: expect.arrayContaining([expect.objectContaining({ content: 'DRAFT' })]) })
+    expect(prepare).not.toHaveBeenCalled()
+    for (const invalid of [null, [], { prompt: 12 }, { prompt: 'a'.repeat(16385) }, { prompt: '', extra: true }]) {
+      expect(() => f.call('her:system-prompt-preview', invalid)).toThrow('提示词预览参数不正确')
+    }
+    expect(() => f.call('her:system-prompt-preview', { ...input, conversationId: 'other' })).toThrow('请先进入原话题')
+    await expect(f.call('her:system-prompt-preview', { ...input, profileId: 'missing' })).rejects.toThrow()
+  } finally {
+    await f.host?.stopAll(); await f.manager.shutdown(); f.store.close()
+    if (f.directory) rmSync(f.directory, { recursive: true, force: true })
+  }
+})
+
 it('accepts only the three appearance preferences through IPC', () => {
   const fixture = ipcFixture()
   try {

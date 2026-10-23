@@ -472,6 +472,12 @@ test('desktop: custom system prompt configuration', async () => {
     // 默认原文直接载入，允许在原文上修改。
     const defaultPrompt = await page.evaluate(() => window.her.getDefaultSystemPrompt())
     await expect(promptTextarea).toHaveValue(defaultPrompt)
+    expect(defaultPrompt).toContain('# 任务执行')
+    expect(defaultPrompt).toContain('# 失败与完成')
+    const requestsBeforePreview = provider.requests.length
+    await page.getByRole('button', { name: '刷新预览', exact: true }).click()
+    await expect(page.getByRole('tabpanel', { name: '草稿预览', exact: true })).toContainText('条件性加入')
+    expect(provider.requests).toHaveLength(requestsBeforePreview)
 
     // 编辑提示词
     const customInstruction = '请在回答前加上 SYSTEM_PROMPT_EDIT_MARKER 前缀。'
@@ -497,10 +503,15 @@ test('desktop: custom system prompt configuration', async () => {
     await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
     await page.getByRole('tab', { name: '系统提示词', exact: true }).click()
     await expect(promptTextarea).toHaveValue(customPrompt)
+    await page.getByRole('tab', { name: '最近实际使用', exact: true }).click()
+    const actualPrompt = page.getByLabel('实际系统提示词', { exact: true })
+    await expect(actualPrompt).toHaveValue(new RegExp('SYSTEM_PROMPT_EDIT_MARKER'))
+    await expect(page.getByRole('tabpanel', { name: '最近实际使用', exact: true })).toContainText('fixture-openai')
     await page.getByRole('button', { name: '恢复默认', exact: true }).click()
 
     // 恢复后仍显示可编辑的默认原文。
     await expect(promptTextarea).toHaveValue(defaultPrompt)
+    await expect(actualPrompt).toHaveValue(new RegExp('SYSTEM_PROMPT_EDIT_MARKER'))
 
     // 保存后在已有对话中发送，验证下一次请求使用默认提示词。
     await page.getByRole('button', { name: '保存提示词', exact: true }).click()
@@ -514,6 +525,10 @@ test('desktop: custom system prompt configuration', async () => {
     await expect(secondReply.locator('.message-body')).not.toBeEmpty()
     expect(JSON.stringify(provider.requests.at(-1)?.body)).not.toContain(customInstruction)
     expect(JSON.stringify(provider.requests.at(-1)?.body)).toContain('你是 Samantha')
+    await page.locator('.sidebar-more summary').click(); await page.getByRole('button', { name: '设置', exact: true }).click()
+    await page.getByRole('tab', { name: '系统提示词', exact: true }).click()
+    await page.getByRole('tab', { name: '最近实际使用', exact: true }).click()
+    await expect(page.getByLabel('实际系统提示词', { exact: true })).not.toHaveValue(new RegExp('SYSTEM_PROMPT_EDIT_MARKER'))
 
   } finally {
     await app?.close()

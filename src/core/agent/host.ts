@@ -1,7 +1,7 @@
 import { HttpComparison } from '../delegations/http-comparison'
 import { createHash, randomUUID } from 'node:crypto'
 import { rm } from 'node:fs/promises'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { parseSessionEntries, type AgentSession, type SessionManager } from '@earendil-works/pi-coding-agent'
 import type { ToolExecutionContext, ToolRegistry } from '../tools/types'
@@ -23,7 +23,8 @@ import { RunLimits, RunLimitError } from './limits'
 import { classifyRun } from './recover'
 import { ConversationHandle } from './handle'
 import { piTaskStatus } from './events'
-import { buildSystemPrompt } from './system-prompt'
+import { systemPromptParts } from './system-prompt'
+import type { SystemPromptPreview, SystemPromptPreviewInput, SystemPromptSnapshot } from '../../shared/types'
 import { compactionBudget, exceedsWindow } from './budget'
 import type { FileAccessService } from '../files/access'
 import type { McpConnectionManager } from '../mcp/manager'
@@ -152,6 +153,33 @@ export class AgentHost {
     const conversation = this.store.getConversation(id)
     if (!conversation || conversation.deletedAt) throw new Error('该对话已经不存在。')
     return conversation
+  }
+
+  async previewSystemPrompt(input: SystemPromptPreviewInput): Promise<SystemPromptPreview> {
+    const conversation = input.conversationId ? this.conversation(input.conversationId) : undefined
+    const provider = input.profileId ? await this.profiles.resolve(input.profileId, input.model) : undefined
+    const contextWindow = provider ? compactionBudget(provider.contextWindow, provider.maxOutputTokens).contextWindow : null
+    const parts = systemPromptParts(input.prompt, undefined, { contextWindow: contextWindow ?? Number.POSITIVE_INFINITY, disabledSkillIds: this.store.getSettings().disabledSkillIds })
+    if (contextWindow === null) {
+      const skills = parts.find(part => part.id === 'skills')
+      if (skills?.status === 'included') { skills.status = 'conditional'; skills.source = '尚未选择模型；是否加入取决于窗口预算' }
+    }
+    let actual: SystemPromptSnapshot | null = null
+    if (conversation && existsSync(join(this.dataDirectory, 'pi', 'sessions', conversation.id))) {
+      const { manager } = await openConversationHistory(this.dataDirectory, conversation)
+      for (const entry of [...manager.getBranch()].reverse()) {
+        if (entry.type !== 'custom' || entry.customType !== 'her.system-prompt-used') continue
+        const value = entry.data as SystemPromptSnapshot | undefined
+        if (value?.conversationId === conversation.id && typeof value.text === 'string' && typeof value.profileId === 'string' &&
+          typeof value.model === 'string' && typeof value.usedAt === 'string' && Number.isFinite(Date.parse(value.usedAt)) &&
+          Array.isArray(value.toolNames) && value.toolNames.every(name => typeof name === 'string') &&
+          Array.isArray(value.parts) && value.parts.every(part => part && typeof part.id === 'string' && typeof part.title === 'string' &&
+            typeof part.source === 'string' && typeof part.content === 'string' && ['included', 'conditional', 'omitted'].includes(part.status))) actual = value
+        break
+      }
+    }
+    if (conversation) this.conversation(conversation.id)
+    return { parts, contextWindow, actual }
   }
 
   async getMessages(conversationId: string): Promise<ChatMessage[]> {
@@ -993,8 +1021,17 @@ export class AgentHost {
           onChat({ requestId: run.requestId, conversationId: run.conversationId, message: { ...assistant }, done: false, task: this.taskEvent(run) })
         }
       })
-      connection = await createHerAgentSession(provider, conversation, this.dataDirectory, buildSystemPrompt(systemPrompt, tools.map(tool => tool.name), { contextWindow: compactionBudget(provider.contextWindow, provider.maxOutputTokens).contextWindow, disabledSkillIds: this.store.getSettings().disabledSkillIds }), run.controller.signal, history, tools, undefined,
-        this.guardFor(run.conversationId, keys => { run.sources = keys }))
+      const promptParts = systemPromptParts(systemPrompt, tools.map(tool => tool.name), { contextWindow: compactionBudget(provider.contextWindow, provider.maxOutputTokens).contextWindow, disabledSkillIds: this.store.getSettings().disabledSkillIds })
+      const promptText = promptParts.filter(part => part.status === 'included').map(part => part.content).join('\n\n')
+      connection = await createHerAgentSession(provider, conversation, this.dataDirectory, promptText, run.controller.signal, history, tools, undefined,
+        this.guardFor(run.conversationId, keys => { run.sources = keys }), text => {
+          if (!text.startsWith(promptText)) return // Internal compaction uses its own prompt.
+          const parts = promptParts.filter(part => part.status === 'included')
+          const extra = text.startsWith(promptText) ? text.slice(promptText.length).trim() : ''
+          if (extra) parts.push({ id: 'sdk', title: 'SDK 运行信息', source: 'Pi SDK 请求上下文', content: extra, status: 'included' })
+          hist.manager.appendCustomEntry('her.system-prompt-used', { conversationId: conversation.id, profileId: provider.id, model: provider.model,
+            usedAt: new Date().toISOString(), text, parts, toolNames: tools.map(tool => tool.name) } satisfies SystemPromptSnapshot)
+        })
       run.controller.signal.throwIfAborted()
       run.session = connection.session
       unsubscribe = connection.session.subscribe(event => {

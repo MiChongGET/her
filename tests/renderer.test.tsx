@@ -148,6 +148,7 @@ beforeEach(() => {
     setDesktopPreferences: vi.fn().mockImplementation(async (input) => { backendState.settings = { ...backendState.settings, ...input }; return structuredClone(backendState.settings) }),
     setAppearance: vi.fn().mockImplementation(async appearance => { backendState.settings = { ...backendState.settings, appearance }; return structuredClone(backendState.settings) }),
     getSystemPrompt: vi.fn().mockResolvedValue(''),
+    previewSystemPrompt: vi.fn().mockResolvedValue({ parts: [], contextWindow: null, actual: null }),
     listSkills: vi.fn().mockResolvedValue([]),
     setSkillEnabled: vi.fn().mockResolvedValue([]),
     setSystemPrompt: vi.fn().mockResolvedValue(undefined),

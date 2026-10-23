@@ -211,6 +211,8 @@ describe('provenance records (7.2)', () => {
   it('a summary depends on the files behind what it summarised', async () => {
     const s = await server('text')
     const f = harness(undefined, undefined, true), p = await profile(f, s.baseUrl, { contextWindow: 4096 })
+    // Keep this provenance scenario below automatic compaction regardless of default prompt size.
+    f.store.setSettings({ ...f.store.getSettings(), systemPrompt: 'Test assistant.' })
     const file = await attach(f, 'summarised.txt', 'x')
     await say(f, p.id, `FIRST-TURN ${long(2000)}`, [file.reference.id])
     // Stay under the point where Pi compacts by itself (a fifth turn crosses it in a 4096 window), so the manual compaction has something to do.

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
+import { getCurrentSystemPrompt, normalizeContext } from '@earendil-works/pi-ai/utils/transcript'
 import type { CredentialStore, Model, ProviderStreams } from '@earendil-works/pi-ai'
 import type { ResourceLoader, ToolDefinition } from '@earendil-works/pi-coding-agent'
 import type { StoredConversation } from '../storage/store'
@@ -67,7 +67,8 @@ export async function createHerAgentSession(
   /** Size reserve/keepRecent for this window instead of the model's own, e.g. when compacting to fit a smaller model. */
   compactForWindow?: number,
   /** Keeps revoked or replaced material out of every request, summary and continuation. */
-  guard?: Omit<SourceGuardOptions, 'branch'>
+  guard?: Omit<SourceGuardOptions, 'branch'>,
+  onPromptUsed?: (text: string) => void
 ) {
   const { createAgentSession, createExtensionRuntime, ModelRuntime, SettingsManager } = await import('@earendil-works/pi-coding-agent')
   let settings: ReturnType<typeof SettingsManager.inMemory> | undefined
@@ -100,7 +101,8 @@ export async function createHerAgentSession(
     baseUrl: model.baseUrl, api: model.api, models: [model],
     streamSimple: (selected, context, options) => {
       finished = false; terminated = false; inputReported = false; outputReported = false
-      return adapter.streamSimple(selected, normalizeContext(context), {
+      const transcript = normalizeContext(context)
+      return adapter.streamSimple(selected, transcript, {
       ...options, apiKey: provider.apiKey || marker, headers: provider.customHeaders,
       signal: options?.signal ? AbortSignal.any([signal, options.signal]) : signal,
       timeoutMs: 60_000, maxRetries: 0, cacheRetention: 'none',
@@ -119,6 +121,7 @@ export async function createHerAgentSession(
           if (/redirect/i.test(detail)) giveUp()
           throw error
         }
+        onPromptUsed?.(getCurrentSystemPrompt(transcript.messages))
         if (!response.ok && !TRANSIENT_STATUS.has(response.status)) giveUp()
         if (!response.ok || !response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
           transport.failure = !response.ok ? `模型服务请求失败（HTTP ${response.status}），请检查模型设置。` : '模型服务未返回 SSE 流，请检查协议。'

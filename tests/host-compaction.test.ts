@@ -31,6 +31,8 @@ const compactions = async (f: ReturnType<typeof harness>) => (await entriesOf(f)
 
 /** History large enough that Pi has something beyond the recent part it keeps verbatim. */
 async function fill(f: ReturnType<typeof harness>, profileId: string, turns = 5) {
+  // Pin prompt size so these manual-compaction thresholds do not depend on product copy.
+  f.store.setSettings({ ...f.store.getSettings(), systemPrompt: 'Test assistant.' })
   // About 2500 tokens: over what Pi keeps verbatim in a 4096 window, under the point where it compacts by itself.
   for (let i = 0; i < turns; i++) await say(f, profileId, `${i}:${long(2000)}`)
 }

@@ -554,6 +554,21 @@ button svg { flex: 0 0 auto; }
 .system-prompt-settings { max-width: 600px; padding: 31px 35px; }
 .system-prompt-settings h3 { font-family: 'Songti SC', 'STSong', Georgia, serif; font-size: 23px; font-weight: 400; color: #6a7f54; margin: 0 0 13px; }
 .system-prompt-settings textarea { min-height: 280px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; line-height: 1.6; }
+.system-prompt-settings > small { display: block; margin-top: 10px; color: var(--muted); line-height: 1.6; }
+.prompt-preview { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.prompt-preview-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.prompt-preview-tabs { display: flex; gap: 8px; }
+.prompt-preview-tabs button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 7px; color: var(--muted); background: transparent; }
+.prompt-preview-tabs button[aria-selected="true"] { color: var(--ink); background: var(--accent-light); }
+.prompt-preview-note, .prompt-preview-empty, .prompt-record-meta { color: var(--muted); font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.prompt-parts { display: grid; gap: 10px; margin-top: 14px; }
+.prompt-part { padding: 12px; border: 1px solid var(--line); border-radius: 7px; }
+.prompt-part summary { cursor: pointer; font-size: 13px; }
+.prompt-part-status { margin-left: 10px; font-size: 11px; color: var(--muted); }
+.prompt-part-status.included { color: var(--accent-dark); }
+.prompt-part > small { display: block; margin-top: 10px; color: var(--muted); }
+.prompt-part pre { max-height: 280px; overflow: auto; margin-bottom: 0; padding: 10px; border-radius: 4px; background: var(--paper); white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; user-select: text; }
+
 .char-count { color: #8fa375; font-weight: 500; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-thumb { background: #dbe1d1; border-radius: 4px; }
