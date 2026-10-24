@@ -14,6 +14,7 @@ import DocumentSources, { FilePreview } from './DocumentSources'
 import SettingsPanel from './SettingsPanel'
 import TrashPanel from './TrashPanel'
 import { Icon, HerMark, SamanthaAvatar } from './Visuals'
+import { WeatherWidget } from './WeatherWidget'
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : '操作未完成，请重试。'
@@ -698,7 +699,7 @@ export default function App() {
   const queue = currentId ? queues[currentId] : null
 
   return <div className={`app-shell${resizingSidebar ? ' is-resizing' : ''}`} style={{ '--sidebar-width': `${sidebarWidth}px` } as CSSProperties}>
-    <div className="app-topbar"><span className="topbar-name"><HerMark /></span><span className="topbar-motto">和你一起，把日子慢慢过好</span></div>
+    <div className="app-topbar"><span className="topbar-name"><HerMark /></span><div className="topbar-right"><WeatherWidget /><span className="topbar-motto">和你一起，把日子慢慢过好</span></div></div>
     <button className="icon-button sidebar-toggle" aria-label={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} title={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} aria-expanded={!sidebarHidden} aria-controls="conversation-sidebar" onClick={() => setSidebarHidden(hidden => !hidden)}><Icon name="sidebar" /></button>
     <aside id="conversation-sidebar" className="sidebar" aria-label="会话侧栏" hidden={sidebarHidden} style={{ width: sidebarWidth }} data-compact={sidebarWidth < 240}>
       <div className="brand"><button ref={avatarTriggerRef} className="avatar-preview-trigger" type="button" aria-label="放大 Samantha 头像" aria-haspopup="dialog" title="放大 Samantha 头像" onClick={() => setAvatarPreviewOpen(true)}><SamanthaAvatar /></button><div><span className="brand-name">Samantha</span><p>你的私人伙伴</p></div></div>

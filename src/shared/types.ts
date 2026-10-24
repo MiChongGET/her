@@ -388,6 +388,32 @@ export interface ChatMessage {
 
 export type Appearance = 'light' | 'dark' | 'system'
 
+export interface WeatherCity {
+  id: number
+  name: string
+  region: string
+  country: string
+  latitude: number
+  longitude: number
+  timezone: string
+}
+
+export interface WeatherReport {
+  city: WeatherCity
+  fetchedAt: string
+  current: { time: string; temperature: number; code: number; isDay: boolean; windSpeed: number }
+  daily: { date: string; code: number; min: number; max: number; precipitationProbability: number | null; windSpeed: number | null }[]
+  hourly: { time: string; temperature: number | null; code: number | null; precipitationProbability: number | null; windSpeed: number | null }[]
+}
+
+export interface WeatherState {
+  city: WeatherCity | null
+  report: WeatherReport | null
+  stale: boolean
+  updating: boolean
+  error?: string
+}
+
 export interface DesktopSettings {
   activeProfileId: string | null
   shortcut: string
@@ -396,6 +422,7 @@ export interface DesktopSettings {
   appearance: Appearance
   systemPrompt?: string
   disabledSkillIds?: string[]
+  weather?: { city: WeatherCity; report?: WeatherReport }
 }
 
 export interface BuiltinSkill {
@@ -641,6 +668,11 @@ export interface DelegationDetails {
 }
 
 export interface HerApi {
+  getWeatherState(): Promise<WeatherState>
+  searchWeatherCities(query: string): Promise<WeatherCity[]>
+  selectWeatherCity(id: number): Promise<WeatherState>
+  refreshWeather(): Promise<WeatherState>
+  onWeatherState(callback: (state: WeatherState) => void): () => void
   previewTopicHandoff(input: { conversationId: string; messageIds: string[] }): Promise<TopicHandoffPreview>
   commitTopicHandoff(input: { operationId: string; previewId: string; digest: string }): Promise<TopicHandoffOperation>
   getTopicHandoffOperation(operationId: string): Promise<TopicHandoffOperation | null>

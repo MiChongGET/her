@@ -51,6 +51,8 @@ import { WorkspaceService } from '../src/core/conversation/workspace'
 import { TopicHandoffService } from '../src/core/conversation/topic-handoff'
 import { ChatService } from '../src/core/conversation/chat'
 import type { HerApi } from '../src/shared/types'
+import { WeatherService } from '../src/core/weather/service'
+import { cityResponse, forecastResponse, weatherCity } from './weather-fixtures'
 
 function ipcFixture(realHost = false, revalidate = false) {
   const store = new HerStore(':memory:')
@@ -71,10 +73,26 @@ function ipcFixture(realHost = false, revalidate = false) {
   const mainFrame = { url: 'her://app/index.html' }
   const publish = vi.fn()
   const window = { webContents: { mainFrame, send: publish } }
-  registerIpc({ window: window as never, store, profiles, configs, manager, dependencies: new PresetDependencies(), artifacts, files: new FileAccessService(store, lifetime.signal), chat, workspace, topicHandoffs, lifetime: lifetime.signal, pending: new Set(), appVersion: 'test', dataDirectory: 'test', desktopPreferences: input => ({ activeProfileId: null, appearance: 'light', ...input }), setAppearance: appearance => ({ ...store.getSettings(), appearance }), onPendingActionsChanged: () => window.webContents.send('her:workspace-pending-event', workspace.getPendingActions()) })
+  const weather = new WeatherService({ store, signal: lifetime.signal, fetch: async input => Response.json(String(input).includes('geocoding-api') ? cityResponse() : forecastResponse()) })
+  registerIpc({ window: window as never, store, profiles, configs, manager, weather, dependencies: new PresetDependencies(), artifacts, files: new FileAccessService(store, lifetime.signal), chat, workspace, topicHandoffs, lifetime: lifetime.signal, pending: new Set(), appVersion: 'test', dataDirectory: 'test', desktopPreferences: input => ({ activeProfileId: null, appearance: 'light', ...input }), setAppearance: appearance => ({ ...store.getSettings(), appearance }), onPendingActionsChanged: () => window.webContents.send('her:workspace-pending-event', workspace.getPendingActions()) })
   const event = { sender: window.webContents, senderFrame: mainFrame }
   return { publish, onChat, onRequest, host, directory, store, workspace, chat, profiles, configs, manager, lifetime, event, call: (channel: string, ...args: unknown[]) => electronMock.handlers.get(channel)!(event, ...args) }
 }
+
+it('accepts weather queries only through the trusted main frame with valid city inputs', async () => {
+  const f = ipcFixture()
+  try {
+    expect(await f.call('her:weather-state')).toMatchObject({ city: null, report: null })
+    for (const value of [null, {}, 123, '', 'a'.repeat(101)]) await expect(f.call('her:weather-search', value)).rejects.toThrow()
+    for (const value of [null, {}, '123', -1, 1.2]) expect(() => f.call('her:weather-select', value)).toThrow()
+    const handler = electronMock.handlers.get('her:weather-search')!
+    expect(() => handler({ ...f.event, senderFrame: { url: 'https://evil.test' } }, '合肥')).toThrow('无权')
+    expect(await f.call('her:weather-search', '合肥')).toEqual(expect.arrayContaining([weatherCity]))
+    expect(await f.call('her:weather-select', weatherCity.id)).toMatchObject({ city: weatherCity, report: { current: { temperature: 22 } } })
+    expect(f.store.getSettings().weather?.city).toEqual(weatherCity)
+    expect(await f.call('her:weather-refresh')).toMatchObject({ city: weatherCity })
+  } finally { await f.manager.shutdown(); f.store.close() }
+})
 
 it('validates prompt previews and rechecks the selected topic without starting MCP', async () => {
   const f = ipcFixture(true)

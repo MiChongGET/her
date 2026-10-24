@@ -866,6 +866,33 @@ body { min-width: 700px; }
 .topbar-name { position: absolute; left: calc(var(--sidebar-width) - 110px); display: flex; }
 .topbar-name .her-mark { width: 54px; height: 36px; }
 .topbar-motto { margin-left: auto; color: var(--muted); font-size: 11px; }
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 18px; }
+.weather-widget { position: relative; z-index: 8; -webkit-app-region: no-drag; }
+.app-shell:has(.weather-popover) .chat-header { -webkit-app-region: no-drag; }
+.weather-popover { -webkit-app-region: no-drag; }
+.weather-trigger { display: flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--accent-dark); font-size: 12px; font-variant-numeric: tabular-nums; }
+.weather-trigger:hover, .weather-trigger[aria-expanded="true"] { background: var(--accent-light); }
+.weather-muted { color: var(--muted); }
+.weather-icon { width: 22px; height: 22px; flex: none; }
+.weather-stale-dot { width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.weather-popover { position: absolute; top: calc(100% + 12px); right: 0; width: 320px; max-width: calc(100vw - 32px); max-height: calc(100vh - 90px); overflow: auto; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink); box-shadow: 0 12px 35px #0002; }
+.weather-popover header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.weather-popover h2 { margin: 0; font: 20px/1.4 'Songti SC', 'STSong', Georgia, serif; }
+.weather-popover .icon-button { width: 24px; height: 24px; }
+.weather-summary { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; margin-bottom: 18px; }
+.weather-summary p { margin: 0; font-size: 14px; }
+.weather-summary small { grid-column: 1; color: var(--muted); font-size: 11px; }
+.weather-summary button { grid-column: 2; grid-row: 1 / 3; }
+.weather-popover label { display: block; margin-bottom: 8px; font-size: 12px; }
+.weather-search { display: flex; gap: 8px; }
+.weather-search input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); font-size: 12px; }
+.weather-search button { flex: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 7px; background: var(--accent-light); color: var(--accent-dark); font-size: 12px; }
+.weather-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
+.weather-cities { list-style: none; margin: 12px 0 0; padding: 0; }
+.weather-cities button { width: 100%; padding: 9px 7px; border: 0; border-radius: 7px; background: transparent; color: var(--ink); font-size: 12px; text-align: left; }
+.weather-cities button:hover, .weather-cities button:focus-visible { background: var(--accent-light); }
+.weather-popover footer { display: flex; gap: 12px; margin-top: 14px; font-size: 10px; }
+.weather-popover footer a { color: var(--muted); }
 .sidebar-toggle { top: 11px; left: calc(var(--sidebar-width) - 36px); -webkit-app-region: no-drag; }
 .sidebar-more { position: relative; }
 .sidebar-more summary { list-style: none; width: max-content; padding: 6px 9px; border-radius: 6px; color: var(--muted); font-size: 12px; cursor: pointer; }

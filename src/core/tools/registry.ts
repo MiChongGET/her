@@ -8,6 +8,7 @@ import { abortable } from './abort'
 import type { DispatchPhase } from './ledger'
 import type { ActionDescriptor } from '../delegations/types'
 import { describeMessageAction, bindMessageAction, messageActionFacts, messageActionCurrent } from './message-actions'
+import { bindWeatherAction } from '../weather/tools'
 
 interface RegisteredTool {
   definition: ToolDefinition
@@ -84,6 +85,7 @@ export class SimpleToolRegistry implements ToolRegistry {
       payloadHash: createHash('sha256').update(original).digest('hex')
     })
     bindMessageAction(message, action)
+    bindWeatherAction(tool.executor, action)
     if (description) context.actionPolicy?.observeAction?.(action)
     // Effect labels from ordinary assessments cannot exempt an opaque dispatch from the ledger.
     assessment = { ...assessment, effect: action.opaque ? 'unknown' : action.effect, target: action.targetId }

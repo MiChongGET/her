@@ -17,6 +17,7 @@ import { PresetDependencies } from '../core/mcp/dependencies'
 import { PRESETS, PEEKABOO_ARGS, PEEKABOO_ENV } from '../core/mcp/presets'
 import { externalUrl, isTrustedRenderer } from './ipc-policy'
 import { BUILTIN_SKILLS } from '../core/skills/builtin'
+import { WeatherService } from '../core/weather/service'
 
 function identifier(value: unknown): string {
   if (typeof value !== 'string' || !value || value.length > 128) throw new Error('对象标识不正确。')
@@ -31,6 +32,7 @@ interface IpcDependencies {
   chat: ChatService
   workspace: WorkspaceService
   topicHandoffs: TopicHandoffService
+  weather: WeatherService
   configs: McpConfigService
   manager: McpConnectionManager
   dependencies: PresetDependencies
@@ -64,6 +66,13 @@ export function registerIpc(deps: IpcDependencies): void {
     })
   }
   const fileContext = (conversationId: string) => ({ conversationId, runId: 'file-ui', callId: 'file-ui', signal: deps.lifetime })
+  handle('her:weather-state', () => deps.weather.getState())
+  handle('her:weather-search', query => deps.weather.searchCities(query as string, deps.lifetime))
+  handle('her:weather-select', id => {
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) throw new Error('请选择有效的天气城市。')
+    return deps.weather.selectCity(id)
+  })
+  handle('her:weather-refresh', () => deps.weather.refresh(true))
   const sourceInput = (input: unknown) => {
     if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !['conversationId', 'fileId'].includes(key))) throw new Error('文件引用不正确。')
     const value = input as Record<string, unknown>

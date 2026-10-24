@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
-import type { HerApi, WorkspaceChatEvent, WorkspaceRequestEvent, WorkspaceTaskEvent, PendingActionNotice } from '../shared/types'
+import type { HerApi, WorkspaceChatEvent, WorkspaceRequestEvent, WorkspaceTaskEvent, PendingActionNotice, WeatherState } from '../shared/types'
 
 function applyEffectiveAppearance(value: 'light' | 'dark'): void {
   if (typeof document === 'undefined') return
@@ -38,6 +38,15 @@ const createIpcProxy = <T extends (...args: any[]) => any>(channel: string, fn: 
 }
 
 const api: HerApi = {
+  getWeatherState: createIpcProxy('her:weather-state', () => ipcRenderer.invoke('her:weather-state')),
+  searchWeatherCities: createIpcProxy('her:weather-search', query => ipcRenderer.invoke('her:weather-search', query)),
+  selectWeatherCity: createIpcProxy('her:weather-select', id => ipcRenderer.invoke('her:weather-select', id)),
+  refreshWeather: createIpcProxy('her:weather-refresh', () => ipcRenderer.invoke('her:weather-refresh')),
+  onWeatherState: callback => {
+    const listener = (_event: Electron.IpcRendererEvent, state: WeatherState) => callback(state)
+    ipcRenderer.on('her:weather-event', listener)
+    return () => ipcRenderer.removeListener('her:weather-event', listener)
+  },
   getDelegationDetails: createIpcProxy('her:delegation-details', (conversationId) => ipcRenderer.invoke('her:delegation-details', conversationId)),
   previewTopicHandoff: createIpcProxy('her:topic-handoff-preview', input => ipcRenderer.invoke('her:topic-handoff-preview', input)),
   commitTopicHandoff: createIpcProxy('her:topic-handoff-commit', input => ipcRenderer.invoke('her:topic-handoff-commit', input)),

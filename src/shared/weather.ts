@@ -1,0 +1,15 @@
+export function weatherDescription(code: number): string {
+  if (code === 0) return '晴'
+  if (code === 1) return '晴间多云'
+  if (code === 2) return '多云'
+  if (code === 3) return '阴'
+  if ([45, 48].includes(code)) return '雾'
+  if ([51, 53, 55].includes(code)) return '毛毛雨'
+  if ([56, 57, 66, 67].includes(code)) return '冻雨'
+  if ([61, 63, 65].includes(code)) return '雨'
+  if ([71, 73, 75, 77].includes(code)) return '雪'
+  if ([80, 81, 82].includes(code)) return '阵雨'
+  if ([85, 86].includes(code)) return '阵雪'
+  if ([95, 96, 99].includes(code)) return '雷雨'
+  return '天气状况未知'
+}

@@ -78,6 +78,8 @@ beforeEach(() => {
   }
   emitRequest = () => {}
   bridge = {
+    getWeatherState: vi.fn().mockResolvedValue({ city: null, report: null, stale: false, updating: false }),
+    searchWeatherCities: vi.fn().mockResolvedValue([]), selectWeatherCity: vi.fn(), refreshWeather: vi.fn(), onWeatherState: vi.fn(() => () => {}),
     previewTopicHandoff: vi.fn(), commitTopicHandoff: vi.fn(), getTopicHandoffOperation: vi.fn(),
     getDelegationDetails: vi.fn().mockImplementation(async conversationId => ({ conversationId, delegations: [], scopes: [], controls: [] })),
     pauseDelegation: vi.fn(), cancelDelegation: vi.fn(), resumeDelegation: vi.fn(), approveDelegationScope: vi.fn(), rejectDelegationScope: vi.fn(),

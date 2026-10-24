@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { isWeatherAction } from '../weather/tools'
 import { messageActionFacts, messageActionCurrent, type MessageTarget } from '../tools/message-actions'
 import { DeniedStepError } from '../tools/approval'
 import type { HttpComparison } from './http-comparison'
@@ -25,6 +26,7 @@ export class DelegationService {
       this.assertCurrent(action, localCandidate)
       if (intent) this.trusted(intent)
     } catch { return 'deny' }
+    if (isWeatherAction(action)) return 'allow'
     const message = messageActionFacts(action)
     if (intent && message && this.authorizeExactMessage(intent, message.target, message.text, action)) return 'allow'
     if (!action.delegationId || action.opaque) return 'confirm'

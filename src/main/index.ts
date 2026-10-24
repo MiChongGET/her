@@ -2,7 +2,7 @@ import { PdfService, registerPdfTools } from '../core/documents/pdf'
 import { ElectronPdfRenderer } from './pdf-renderer'
 import { DocumentService, registerDocumentTools } from '../core/documents/service'
 import { createMarkItDownParser, MARKITDOWN_POLICY } from '../core/documents/markitdown'
-import { app, BrowserWindow, dialog, globalShortcut, Menu, Notification, nativeImage, nativeTheme, net, protocol, session, Tray, type MenuItemConstructorOptions } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, Menu, Notification, nativeImage, nativeTheme, net, powerMonitor, protocol, session, Tray, type MenuItemConstructorOptions } from 'electron'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { existsSync, mkdirSync } from 'node:fs'
@@ -14,6 +14,8 @@ import { AgentHost } from '../core/agent/host'
 import { FileAccessService } from '../core/files/access'
 import { registerFileTools } from '../core/files/tools'
 import { createDefaultRegistry } from '../core/tools/registry'
+import { WeatherService } from '../core/weather/service'
+import { registerWeatherTools } from '../core/weather/tools'
 import { EgoBrowserTools } from '../core/tools/ego-browser'
 import { combineRegistries } from '../core/tools/combine'
 import { secretCodec } from './credentials'
@@ -147,6 +149,21 @@ async function start(): Promise<void> {
   })
   const currentStore = store
   const registry = createDefaultRegistry()
+  const weather = new WeatherService({ store: currentStore, signal: lifetime.signal,
+    fetch: (input, options) => net.fetch(String(input), options),
+    onState: state => { if (!lifetime.signal.aborted && !window.isDestroyed()) window.webContents.send('her:weather-event', state) } })
+  registerWeatherTools(registry, weather)
+  const refreshWeather = (force = false) => {
+    const request = weather.refresh(force)
+    pending.add(request)
+    void request.finally(() => pending.delete(request)).catch(() => {})
+  }
+  const weatherTimer = setInterval(() => refreshWeather(true), 30 * 60_000)
+  weatherTimer.unref()
+  const resumeWeather = () => refreshWeather()
+  powerMonitor.on('resume', resumeWeather)
+  lifetime.signal.addEventListener('abort', () => { clearInterval(weatherTimer); powerMonitor.removeListener('resume', resumeWeather) }, { once: true })
+  refreshWeather(true)
   const configs = new McpConfigService(currentStore, secretCodec, lifetime.signal)
   const files = new FileAccessService(currentStore, lifetime.signal)
   registerFileTools(registry, files)
@@ -226,7 +243,7 @@ async function start(): Promise<void> {
     drain: () => Promise.allSettled([chat!.shutdown(), manager.shutdown(), dependencies.shutdown(), browser.shutdown(), documents.shutdown(), pdf.shutdown(), artifacts.shutdown(), ...pending]),
     forceClose: () => { manager.forceCloseOwnedProcesses(); dependencies.forceCloseOwnedProcesses(); browser.forceCloseOwnedProcesses() }, close: () => currentStore.close() })
   registerIpc({
-    window, developmentUrl, store: currentStore, profiles, chat, workspace, topicHandoffs, configs, manager, dependencies, artifacts, files, lifetime: lifetime.signal, pending,
+    window, developmentUrl, store: currentStore, profiles, chat, workspace, topicHandoffs, weather, configs, manager, dependencies, artifacts, files, lifetime: lifetime.signal, pending,
     appVersion: app.getVersion(), dataDirectory, desktopPreferences, setAppearance, onPendingActionsChanged: publishPending,
     onSkillDisabled: id => { if (id === 'ego-browser') browser.disable() }
   })
