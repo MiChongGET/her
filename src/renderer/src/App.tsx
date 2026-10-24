@@ -144,6 +144,14 @@ export default function App() {
   }
   const [error, setError] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [avatarPreviewOpen, setAvatarPreviewOpen] = useState(false)
+  const avatarTriggerRef = useRef<HTMLButtonElement>(null)
+  const avatarCloseRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (avatarPreviewOpen) avatarCloseRef.current?.focus() }, [avatarPreviewOpen, currentId])
+  function closeAvatarPreview() {
+    setAvatarPreviewOpen(false)
+    avatarTriggerRef.current?.focus()
+  }
   const panelTrigger = useRef<HTMLElement | null>(null)
   function rememberPanelTrigger() {
     const active = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -693,7 +701,7 @@ export default function App() {
     <div className="app-topbar"><span className="topbar-name"><HerMark /></span><span className="topbar-motto">和你一起，把日子慢慢过好</span></div>
     <button className="icon-button sidebar-toggle" aria-label={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} title={sidebarHidden ? '显示侧栏' : '隐藏侧栏'} aria-expanded={!sidebarHidden} aria-controls="conversation-sidebar" onClick={() => setSidebarHidden(hidden => !hidden)}><Icon name="sidebar" /></button>
     <aside id="conversation-sidebar" className="sidebar" aria-label="会话侧栏" hidden={sidebarHidden} style={{ width: sidebarWidth }} data-compact={sidebarWidth < 240}>
-      <div className="brand"><SamanthaAvatar /><div><span className="brand-name">Samantha</span><p>你的私人伙伴</p></div></div>
+      <div className="brand"><button ref={avatarTriggerRef} className="avatar-preview-trigger" type="button" aria-label="放大 Samantha 头像" aria-haspopup="dialog" title="放大 Samantha 头像" onClick={() => setAvatarPreviewOpen(true)}><SamanthaAvatar /></button><div><span className="brand-name">Samantha</span><p>你的私人伙伴</p></div></div>
       <WorkspaceNavigation selection={workspace?.selection ?? selectionRef.current} overview={overview} onSelect={selection => void selectWorkspace(selection)} onOpenPending={notice => void openPending(notice)} />
       <div className="sidebar-spacer" />
       <div className="sidebar-bottom"><div className="local-note">从这里回到日常<br />事情和记忆，都各有来处。</div><details className="sidebar-more"><summary>更多</summary><div className="sidebar-more-popover"><button className="trash-button" aria-label="回收站" onClick={() => { rememberPanelTrigger(); setTrashOpen(true) }}><Icon name="trash" /><span>回收站</span></button><button className="settings-button" aria-label="设置" onClick={() => void openSettings()}><Icon name="settings" /><span>设置</span><span className="settings-version">v{bootstrap.appVersion}</span></button></div></details></div>
@@ -843,6 +851,15 @@ export default function App() {
       </div>}
     </main>
 
+    {avatarPreviewOpen && <div className="modal-backdrop avatar-preview-backdrop" onMouseDown={event => { if (event.target === event.currentTarget) { event.preventDefault(); closeAvatarPreview() } }}>
+      <section className="avatar-preview" role="dialog" aria-modal="true" aria-label="Samantha 头像预览" tabIndex={-1} onKeyDown={event => {
+        if (event.key === 'Escape') { event.preventDefault(); closeAvatarPreview() }
+        else if (event.key === 'Tab') { event.preventDefault(); avatarCloseRef.current?.focus() }
+      }}>
+        <button ref={avatarCloseRef} className="avatar-preview-close" type="button" aria-label="关闭头像预览" onClick={closeAvatarPreview}><Icon name="close" /></button>
+        <SamanthaAvatar />
+      </section>
+    </div>}
     {trashOpen && <TrashPanel onClose={() => { setTrashOpen(false); (panelTrigger.current ?? composerRef.current)?.focus() }} onRestored={() => void refreshWorkItems()} />}
     {handoffOpen && currentId && selectionRef.current.section === 'daily' && <TopicHandoffDialog sourceConversationId={currentId} messages={messages} resume={handoffResume.current} onResume={value => { handoffResume.current = value }} onClose={() => { handoffOpenRef.current = false; setHandoffOpen(false); composerRef.current?.focus() }} onCreated={id => { if (handoffOpenRef.current && handoffView.current === viewGeneration.current && selectionRef.current.section === 'daily') { handoffResume.current = null; handoffOpenRef.current = false; setHandoffOpen(false); void selectWorkspace({ section: 'work', conversationId: id }) } }} />}
     {settingsOpen && <SettingsPanel conversationId={currentId ?? undefined} promptModel={selectedModel ?? undefined} profiles={bootstrap.profiles} settings={bootstrap.settings} initialProfileId={settingsProfileId} dataDirectory={bootstrap.dataDirectory} onRevokeFileGrant={revokeFileGrant} onClose={() => { setSettingsOpen(false); (panelTrigger.current ?? composerRef.current)?.focus() }} onConfigurationChanged={refreshConfiguration} onAppearanceChanged={(appearance: Appearance) => setBootstrap(state => state && ({ ...state, settings: { ...state.settings, appearance } }))} onSelectProfile={selectProfile} />}
