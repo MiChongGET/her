@@ -1,0 +1,1 @@
+Error: page.evaluate: Error: Error invoking remote method 'her:message-send': Error: Error while decrypting the ciphertext provided to safeStorage.decryptStringAsync.

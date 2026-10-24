@@ -71,7 +71,8 @@ describe('queueing', () => {
     expect(() => f.chat.cancelQueued(f.id, first.requestId)).toThrow('已经开始处理')
     gate.release()
     await expect.poll(() => f.finished(kept.requestId)?.state, { timeout: 15_000 }).toBe('completed')
-    expect(JSON.stringify(s.requests.map(request => request.body))).not.toContain('never')
+    const userMessages = s.requests.flatMap(request => (request.body.messages as { role: string; content: unknown }[]).filter(message => message.role === 'user'))
+    expect(JSON.stringify(userMessages)).not.toContain('never')
     expect(f.state(withdrawn.requestId)).toEqual([])
   }, 30_000)
 

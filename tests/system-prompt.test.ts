@@ -28,7 +28,7 @@ describe('prompt sources and draft conditions', () => {
   })
 
   it('reports skipped skills for small windows and disabled skills', () => {
-    for (const options of [{ contextWindow: 2048 }, { contextWindow: 200_000, disabledSkillIds: ['peekaboo', 'ego-browser'] }]) {
+    for (const options of [{ contextWindow: 2048 }, { contextWindow: 200_000, disabledSkillIds: ['peekaboo', 'ego-browser', 'love-companion'] }]) {
       const parts = systemPromptParts('draft', [], options)
       expect(parts.find(part => part.id === 'skills')?.status).toBe('omitted')
       expect(parts.filter(part => part.status === 'included').map(part => part.content).join('\n\n')).toBe('draft')

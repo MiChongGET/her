@@ -39,7 +39,7 @@ describe('bundled ego-browser skill', () => {
 
   it('filters each skill independently and omits ego mappings when its skill is disabled', () => {
     expect(builtinSkillsPrompt()).toBe(BUILTIN_SKILLS_PROMPT)
-    expect(BUILTIN_SKILLS.map(skill => skill.id)).toEqual(['peekaboo', 'ego-browser'])
+    expect(BUILTIN_SKILLS.map(skill => skill.id)).toEqual(['peekaboo', 'ego-browser', 'love-companion'])
     const desktop = builtinSkillsPrompt(['ego-browser'])
     expect(desktop).toContain('<builtin_skill name="Peekaboo">')
     expect(desktop).not.toContain('ego_browser_guide')
@@ -47,7 +47,7 @@ describe('bundled ego-browser skill', () => {
     const browser = builtinSkillsPrompt(['peekaboo'])
     expect(browser).toContain('<builtin_skill name="ego-browser">')
     expect(browser).not.toContain('<builtin_skill name="Peekaboo">')
-    expect(builtinSkillsPrompt(['peekaboo', 'ego-browser'])).toBe('')
+    expect(builtinSkillsPrompt(['peekaboo', 'ego-browser', 'love-companion'])).toBe('')
     expect(builtinSkillsPrompt(['unknown-skill'])).toBe(BUILTIN_SKILLS_PROMPT)
   })
 })

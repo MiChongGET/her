@@ -34,7 +34,7 @@ export default function SkillsPanel() {
   }
 
   return <section className="skills-panel" aria-label="内置技能">
-    <div className="skills-heading"><h3>内置技能</h3><p>技能为助手提供操作方法。启停将在后续任务中生效，MCP 服务连接单独管理。</p></div>
+    <div className="skills-heading"><h3>内置技能</h3><p>技能提供操作方法与陪伴交流规则。启停将在后续回复中生效，MCP 服务连接单独管理。</p></div>
     {loading && <p role="status">正在加载技能…</p>}
     {error && <p className="error-banner" role="alert">{error}</p>}
     {skills.map(skill => <article className="skill-card" aria-label={skill.name} key={skill.id}>
